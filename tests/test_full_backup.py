@@ -257,6 +257,74 @@ def test_schema_v7_backup_uses_its_three_column_band_indexes(tmp_path):
     assert verify_full_backup(archive)["database"]["schema_version"] == 7
 
 
+def _create_current_shape_database(path):
+    """Build the live ORM layout: no outline columns, current fingerprint index."""
+
+    from sqlalchemy import create_engine
+
+    from mathbank.database import Base
+
+    engine = create_engine(f"sqlite:///{path}")
+    Base.metadata.create_all(bind=engine)
+    engine.dispose()
+
+
+def test_schema_v8_backup_still_counts_the_retired_curriculum_table(tmp_path):
+    database = tmp_path / "math_question_bank.db"
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    _create_current_shape_database(database)
+    with _sqlite_connection(database) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE question_curriculums (
+                id INTEGER PRIMARY KEY,
+                question_id INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+                version_code TEXT NOT NULL,
+                compulsory VARCHAR(100) DEFAULT '',
+                UNIQUE(question_id, version_code)
+            );
+            INSERT INTO questions (id, content) VALUES (1, 'question-1');
+            INSERT INTO question_curriculums (id, question_id, version_code)
+            VALUES (1, 1, 'A');
+            PRAGMA user_version=8;
+            """
+        )
+
+    archive = create_full_backup(
+        output_dir=tmp_path / "snapshots",
+        database_path=database,
+        uploads_dir=uploads,
+        metadata_path=tmp_path / "missing.json",
+        retention=None,
+    )
+
+    manifest = verify_full_backup(archive)
+    assert manifest["database"]["schema_version"] == 8
+    assert manifest["database"]["row_counts"]["question_curriculums"] == 1
+
+
+def test_schema_v9_backup_no_longer_requires_the_curriculum_table(tmp_path):
+    database = tmp_path / "math_question_bank.db"
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    _create_current_shape_database(database)
+    with _sqlite_connection(database) as connection:
+        connection.execute("PRAGMA user_version=9")
+
+    archive = create_full_backup(
+        output_dir=tmp_path / "snapshots",
+        database_path=database,
+        uploads_dir=uploads,
+        metadata_path=tmp_path / "missing.json",
+        retention=None,
+    )
+
+    manifest = verify_full_backup(archive)
+    assert manifest["database"]["schema_version"] == 9
+    assert "question_curriculums" not in manifest["database"]["row_counts"]
+
+
 def test_schema_v6_backup_rejects_missing_fingerprint_table(tmp_path):
     database = tmp_path / "math_question_bank.db"
     uploads = tmp_path / "uploads"

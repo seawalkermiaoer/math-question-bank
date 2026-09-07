@@ -82,38 +82,34 @@ if (escaped !== '$x&lt;y$ and $y&gt;z$ &lt;not-a-tag&gt;') {{
     assert result.returncode == 0, result.stderr
 
 
-def test_category_refresh_only_reloads_editor_when_explicitly_requested():
+def test_metadata_refresh_only_reloads_editor_when_explicitly_requested():
     node = shutil.which("node")
     assert node, "Node.js is required for the frontend executable regression"
 
     api_source = _read(STATIC_JS_DIR / "api.js")
-    helper_start = api_source.index("function loadCategories(options = {})")
+    helper_start = api_source.index("function loadMetadata(options = {})")
     helper_end = api_source.index("// Populate Metadata Select Option Lists", helper_start)
     helper_source = api_source[helper_start:helper_end]
     assert "backupEditorState" not in helper_source
+    assert "/api/categories" not in helper_source
     script = f"""
 const window = {{}};
 let systemMetadata = {{}};
-let categoryTree = {{}};
 let reloads = 0;
 window.reloadCurrentQuestionSilently = () => {{ reloads += 1; }};
 const EditorState = {{ questionId: 7 }};
 function populateMetadataDropdowns() {{}}
-function populateCategoryDropdowns() {{}}
-function populateFilterDropdowns() {{}}
 function showToast() {{}}
 function fetch(url) {{
-  const data = url.endsWith('/metadata')
-    ? {{ question_types: [], difficulties: [], curriculum: {{}} }}
-    : {{ high_school: {{}} }};
+  const data = {{ question_types: [], difficulties: [] }};
   return Promise.resolve({{ ok: true, json: () => Promise.resolve(data) }});
 }}
 {helper_source}
 (async () => {{
-  await loadCategories();
+  await loadMetadata();
   if (reloads !== 0) throw new Error('ordinary metadata refresh reloaded the editor');
-  await loadCategories({{ reloadCurrentQuestion: true }});
-  if (reloads !== 1) throw new Error('explicit curriculum refresh did not reload the editor');
+  await loadMetadata({{ reloadCurrentQuestion: true }});
+  if (reloads !== 1) throw new Error('explicit settings refresh did not reload the editor');
 }})().catch(error => {{ console.error(error); process.exitCode = 1; }});
 """
 
@@ -136,7 +132,7 @@ def test_explicit_settings_refresh_preserves_dirty_editor_in_real_js():
     helper_end = import_source.index("// Save/Update Question", helper_start)
     helper_source = import_source[helper_start:helper_end]
     api_source = _read(STATIC_JS_DIR / "api.js")
-    assert "loadCategories({ reloadCurrentQuestion: true })" in api_source
+    assert "loadMetadata({ reloadCurrentQuestion: true })" in api_source
 
     script = f"""
 const window = {{}};
@@ -162,7 +158,7 @@ if (toasts.length !== 1 || toasts[0][1] !== 'info') {{
 
 dirty = false;
 if (window.reloadCurrentQuestionSilently() !== true || selections !== 1) {{
-  throw new Error('clean editor no longer receives explicit curriculum refresh');
+  throw new Error('clean editor no longer receives explicit settings refresh');
 }}
 """
 
@@ -700,8 +696,8 @@ def test_question_selection_and_save_are_transactional():
     select_start = import_source.index("function selectQuestion(item)")
     select_end = import_source.index("window.reloadCurrentQuestionSilently", select_start)
     select_source = import_source[select_start:select_end]
-    save_start = import_source.index("function saveQuestion(skipCheck = false)")
-    save_end = import_source.index("// AI classification modal handlers", save_start)
+    save_start = import_source.index("function saveQuestion()")
+    save_end = import_source.index("// Delete Question", save_start)
     save_source = import_source[save_start:save_end]
 
     assert "EditorState.useQuestion(item)" not in select_source
@@ -909,7 +905,7 @@ def test_duplicate_checks_are_click_triggered_snapshot_bound_and_explicitly_over
     import_source = _read(STATIC_JS_DIR / "import.js")
 
     render_start = import_source.index("function renderParsedQuestionsList(questions)")
-    render_end = import_source.index("function setupCardCategoryLinkage", render_start)
+    render_end = import_source.index("function renderParsedCardPreview", render_start)
     render_source = import_source[render_start:render_end]
     assert "precheckParsedQuestionDuplicates" not in render_source
     assert "scheduleParsedDuplicatePrecheck" not in import_source
@@ -1105,7 +1101,7 @@ const parsedQuestionSaveInFlight = new Map();
 let parsedBatchSaveInFlight = null;
 const toasts = [];
 function showToast(message, type) {{ toasts.push([message, type]); }}
-function loadCategories() {{}}
+function loadMetadata() {{}}
 function loadQuestions() {{}}
 function updateSelectedCount() {{}}
 function validateParsedQuestionBeforeImport() {{ return true; }}

@@ -111,7 +111,7 @@ def test_cross_page_text_is_merged_without_question_terminator():
 
 
 def test_pdf_parse_system_prompt_includes_formula_and_cross_page_rules():
-    prompt = build_pdf_parse_system_prompt({"必修一": {"集合": []}}, False)
+    prompt = build_pdf_parse_system_prompt(False)
     assert "\\sqrt{...}" in prompt
     assert "\\frac{...}{...}" in prompt
     assert "\\fillin" in prompt

@@ -1,9 +1,8 @@
 import ast
 import asyncio
 
-from mathbank.curriculums import get_curriculum_preset, load_curriculum
+from mathbank.metadata import build_default_metadata
 from mathbank.paths import (
-    CURRICULUMS_DIR,
     DATABASE_FILE,
     PROJECT_ROOT,
     STATIC_DIR,
@@ -35,19 +34,18 @@ def test_python_sources_do_not_use_deprecated_fitz_import():
 
 
 def test_shared_paths_are_absolute_and_project_anchored():
-    for path in (DATABASE_FILE, STATIC_DIR, TEMPLATES_DIR, CURRICULUMS_DIR):
+    for path in (DATABASE_FILE, STATIC_DIR, TEMPLATES_DIR):
         assert path.is_absolute()
     assert DATABASE_FILE.parent == PROJECT_ROOT
     assert STATIC_DIR.parent == PROJECT_ROOT
 
 
-def test_all_curriculum_presets_load_from_resources():
-    for version in ("A", "B", "S", "H"):
-        preset = get_curriculum_preset(version)
-        assert preset["version"] == version
-        assert preset["metadata"]["curriculum"] == load_curriculum(version)
-        assert preset["metadata"]["question_types"]
-        assert preset["metadata"]["difficulties"]
+def test_default_metadata_exposes_only_types_and_difficulties():
+    metadata = build_default_metadata()
+
+    assert set(metadata) == {"question_types", "difficulties"}
+    assert metadata["question_types"]
+    assert metadata["difficulties"]
 
 
 def test_solve_prompt_builder_preserves_required_structure():
@@ -120,7 +118,7 @@ def test_bailian_model_presets_are_current_and_task_specific():
 
     assert "const BAILIAN_MODEL_PRESETS_BY_TASK" in api_source
     assert "const BAILIAN_MODEL_DEFAULTS_BY_TASK" in api_source
-    for task_key in ("solve", "parse", "classify", "ocr", "draw"):
+    for task_key in ("solve", "parse", "ocr", "draw"):
         assert f"{task_key}:" in api_source
     for current_model in ("qwen3.7-flash", "qwen3.7-plus", "qwen3.8-max"):
         assert current_model in api_source
@@ -147,7 +145,6 @@ def test_blocking_upload_and_ai_handlers_run_in_fastapi_worker_threads():
         "upload_pdf_task",
         "upload_docx_task",
         "ai_solve",
-        "ai_classify",
         "ai_parse_paper",
     ):
         assert not inspect.iscoroutinefunction(getattr(main, handler_name))
@@ -248,9 +245,6 @@ def test_post_startup_maintenance_backs_up_before_mutating(monkeypatch):
     monkeypatch.setattr(
         main, "create_full_backup_if_due", lambda: calls.append("backup")
     )
-    monkeypatch.setattr(
-        main, "heal_database_curriculum_names", lambda: calls.append("heal")
-    )
     monkeypatch.setattr(main, "clean_orphaned_images", lambda: calls.append("clean"))
     monkeypatch.setattr(
         main, "recalibrate_usage_counts", lambda: calls.append("recalibrate")
@@ -269,7 +263,6 @@ def test_post_startup_maintenance_backs_up_before_mutating(monkeypatch):
     assert calls == [
         "sleep",
         "backup",
-        "heal",
         "clean",
         "recalibrate",
         "fingerprints",
@@ -288,9 +281,6 @@ def test_post_startup_maintenance_stops_mutation_when_backup_fails(monkeypatch):
         raise OSError("backup unavailable")
 
     monkeypatch.setattr(main, "create_full_backup_if_due", fail_backup)
-    monkeypatch.setattr(
-        main, "heal_database_curriculum_names", lambda: calls.append("heal")
-    )
     monkeypatch.setattr(main, "clean_orphaned_images", lambda: calls.append("clean"))
     monkeypatch.setattr(
         main, "recalibrate_usage_counts", lambda: calls.append("recalibrate")
@@ -304,10 +294,11 @@ def test_post_startup_maintenance_stops_mutation_when_backup_fails(monkeypatch):
     assert calls == ["sleep", "backup", "tools"]
 
 
-def test_metadata_load_does_not_run_full_database_heal_before_ready():
+def test_metadata_load_does_not_touch_the_database_before_ready():
     main_source = (PROJECT_ROOT / "main.py").read_text(encoding="utf-8")
     metadata_start = main_source.index("def load_or_init_metadata()")
-    metadata_end = main_source.index("def get_active_version_code()", metadata_start)
-    assert "heal_database_curriculum_names()" not in main_source[
-        metadata_start:metadata_end
-    ]
+    metadata_end = main_source.index('@app.get("/api/config/metadata")', metadata_start)
+    metadata_source = main_source[metadata_start:metadata_end]
+
+    assert "SessionLocal" not in metadata_source
+    assert "heal_database" not in metadata_source

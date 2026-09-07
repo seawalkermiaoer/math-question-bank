@@ -14,7 +14,7 @@ From the project root, run `python3 -m scripts.search_questions` to fuzzy search
 ### Parameter Reference
 | Option | Long Option | Description | Example / Allowed Values |
 | :--- | :--- | :--- | :--- |
-| `-q` | `--query` | Fuzzy search keyword (matches grade, chapter, knowledge points, or content). | `-q "1.1"` or `-q "三角函数"` |
+| `-q` | `--query` | Fuzzy search keyword (matches the question stem, source, or tags). | `-q "三角函数"` or `-q "武汉二中"` |
 | `-n` | `--limit` | Maximum number of questions to return. **Use `-1` for NO LIMIT.** | `-n 50` or `-n -1` (default: 50) |
 | `-a` | `--with-answers` | Flag to include answers, step-by-step explanations, and reviews. | (Omitting this hides answers) |
 | `-t` | `--type` | Filter by question type. | `single_choice`, `multi_choice`, `fill_in_blank`, `detailed_answer` |
@@ -54,9 +54,6 @@ CREATE TABLE questions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     content TEXT NOT NULL,                  -- Question stem (LaTeX + Markdown mixed)
     question_type VARCHAR(50),              -- Type: single_choice, multi_choice, fill_in_blank, detailed_answer
-    category_compulsory VARCHAR(100),       -- Curriculum: "必修一", "必修二", "选择性必修一"
-    category_chapter VARCHAR(100),          -- Chapter: e.g. "1. 集合与常用逻辑用语"
-    category_knowledge VARCHAR(100),        -- Knowledge Point / Section: e.g. "1.1 集合的概念"
     difficulty VARCHAR(50),                 -- Difficulty: easy, medium, hard
     source VARCHAR(200),                    -- Source / Exam Origin: e.g. "2025 武汉二中高一月考"
     answer_markdown TEXT,                   -- Answers & Explanations (LaTeX + Markdown mixed)

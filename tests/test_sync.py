@@ -51,9 +51,6 @@ def test_export_database_to_files(db_session, tmp_path):
     q = Question(
         content="这只是一道测试同步导出的题目 $x+y=2$",
         question_type="single_choice",
-        category_compulsory="必修一",
-        category_chapter="第一章",
-        category_knowledge="知识点A",
         difficulty="easy",
         tikz_reference_image_path="/static/uploads/ai-reference.png",
     )
@@ -94,7 +91,8 @@ def test_export_database_to_files(db_session, tmp_path):
             md_content = f.read()
             assert "这只是一道测试同步导出的题目" in md_content
             assert "$x+y=2$" in md_content
-            assert "必修一" in md_content
+            assert "# 【单选题】" in md_content
+            assert "🟢 容易" in md_content
             assert "visible-figure.png" in md_content
             assert "ai-reference.png" not in md_content
     finally:

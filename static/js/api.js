@@ -500,8 +500,7 @@
 
         // Global variables
         let activeSidebarTab = 'bank'; // 'bank' or 'drafts'
-        let categoryTree = {};
-        let systemMetadata = { question_types: [], difficulties: [], curriculum: {} };
+        let systemMetadata = { question_types: [], difficulties: [] };
         let uploadedImages = [];
         let uploadedAnswerImages = [];
         const TikzState = {
@@ -602,13 +601,6 @@
                         renderModelSelector('parse', parseCfg.provider, parseCfg.model);
                     }
                     
-                    const classifyCfg = parseModelConfig(settings.prefer_classify_model, 'deepseek', 'deepseek-v4-flash');
-                    const classifyProv = document.getElementById('classifyModelProvider');
-                    if (classifyProv) {
-                        classifyProv.value = classifyCfg.provider;
-                        renderModelSelector('classify', classifyCfg.provider, classifyCfg.model);
-                    }
-                    
                     let ocrProvider = settings.prefer_engine || 'siliconflow';
                     if (ocrProvider === 'ali_bailian') ocrProvider = 'bailian';
                     if (ocrProvider === 'zhongzhan') ocrProvider = 'zhongzhan_gpt';
@@ -664,10 +656,6 @@
                 "qwen3.7-plus",
                 "qwen3.8-max"
             ],
-            classify: [
-                "qwen3.7-flash",
-                "qwen3.7-plus"
-            ],
             ocr: [
                 "qwen3.7-flash",
                 "qwen3.7-plus"
@@ -682,7 +670,6 @@
         const BAILIAN_MODEL_DEFAULTS_BY_TASK = {
             solve: "qwen3.7-plus",
             parse: "qwen3.7-flash",
-            classify: "qwen3.7-flash",
             ocr: "qwen3.7-flash",
             draw: "qwen3.7-plus"
         };
@@ -1008,12 +995,7 @@
                     document.getElementById('parseModelProvider').value = parseCfg.provider;
                     renderModelSelector('parse', parseCfg.provider, parseCfg.model);
                     
-                    // 3. 题目智能分类模型
-                    const classifyCfg = parseModelConfig(settings.prefer_classify_model, 'deepseek', 'deepseek-v4-flash');
-                    document.getElementById('classifyModelProvider').value = classifyCfg.provider;
-                    renderModelSelector('classify', classifyCfg.provider, classifyCfg.model);
-                    
-                    // 4. 默认公式识图模型
+                    // 3. 默认公式识图模型
                     let ocrProvider = settings.prefer_engine || 'siliconflow';
                     if (ocrProvider === 'ali_bailian') ocrProvider = 'bailian'; // 前后端对齐
                     if (ocrProvider === 'zhongzhan') ocrProvider = 'zhongzhan_gpt'; // 兼容老数据
@@ -1183,12 +1165,7 @@
             const parseModel = getSelectedModelValue('parse', parseProvider);
             const preferParseModel = `${parseProvider.toUpperCase()}/${parseModel}`;
             
-            // 3. 题目智能分类模型
-            const classifyProvider = document.getElementById('classifyModelProvider').value;
-            const classifyModel = getSelectedModelValue('classify', classifyProvider);
-            const preferClassifyModel = `${classifyProvider.toUpperCase()}/${classifyModel}`;
-            
-            // 4. 默认公式识图模型 (后端以 prefer_engine + siliconflow_model/ali_bailian_model/zhongzhan_gpt_ocr_model/zhongzhan_claude_ocr_model 区分)
+            // 3. 默认公式识图模型 (后端以 prefer_engine + siliconflow_model/ali_bailian_model/zhongzhan_gpt_ocr_model/zhongzhan_claude_ocr_model 区分)
             const ocrProvider = document.getElementById('ocrModelProvider').value;
             const ocrModel = getSelectedModelValue('ocr', ocrProvider);
             let preferEngine = ocrProvider;
@@ -1204,7 +1181,7 @@
             else if (ocrProvider === 'zhongzhan_gpt') zhongzhanGptOcrModel = ocrModel;
             else if (ocrProvider === 'zhongzhan_claude') zhongzhanClaudeOcrModel = ocrModel;
             
-            // 5. 高级 TikZ 绘图模型
+            // 4. 高级 TikZ 绘图模型
             const drawProvider = document.getElementById('drawModelProvider').value;
             const drawModel = getSelectedModelValue('draw', drawProvider);
             const preferDrawModel = `${drawProvider.toUpperCase()}/${drawModel}`;
@@ -1226,7 +1203,6 @@
             formData.append('ali_bailian_model', aliBailianModel);
             formData.append('prefer_solve_model', preferSolveModel);
             formData.append('prefer_parse_model', preferParseModel);
-            formData.append('prefer_classify_model', preferClassifyModel);
             formData.append('prefer_draw_model', preferDrawModel);
             
             // Chain both saves: metadata JSON and ENV settings parameters
@@ -1264,7 +1240,7 @@
                     showToast('所有配置（含自定义维度）保存成功！');
                     closeSettingsModal();
                     fetchConfigStatus();
-                    loadCategories({ reloadCurrentQuestion: true });
+                    loadMetadata({ reloadCurrentQuestion: true });
                 } else {
                     showToast(data.message, 'error');
                 }
@@ -1274,8 +1250,8 @@
             });
         }
 
-        // Load Categories from Database to Autocomplete Selects
-        function loadCategories(options = {}) {
+        // Load Editable Metadata (Question Types & Difficulties)
+        function loadMetadata(options = {}) {
             const reloadCurrentQuestion = options.reloadCurrentQuestion === true;
             const retryCount = Number.isInteger(options.retryCount) ? options.retryCount : 0;
             return fetch('/api/config/metadata')
@@ -1289,36 +1265,21 @@
                     systemMetadata = meta;
                     window.systemMetadata = meta; // Global export
                     populateMetadataDropdowns();
-                    
-                    return fetch('/api/categories');
-                })
-                .then(r => {
-                    if (!r.ok) {
-                        throw new Error(`HTTP 状态码异常: ${r.status}`);
-                    }
-                    return r.json();
-                })
-                .then(data => {
-                    categoryTree = data;
-                    window.categoryTree = data;
-                    window.systemMetadata = systemMetadata;
-                    populateCategoryDropdowns();
-                    populateFilterDropdowns();
-                    
+
                     // Most callers only need fresh dropdown data. Reloading the
-                    // editor is an explicit settings/curriculum operation because
+                    // editor is an explicit settings operation because
                     // it can replace text typed after a save or batch import.
                     if (reloadCurrentQuestion && typeof window.reloadCurrentQuestionSilently === 'function') {
                         window.reloadCurrentQuestionSilently();
                     }
                 })
                 .catch(err => {
-                    console.error('加载分类目录树或元数据配置发生异常:', err);
+                    console.error('加载元数据配置发生异常:', err);
                     if (retryCount < 3) {
                         console.warn(`[Auto-Retry] 正在尝试第 ${retryCount + 1} 次自适应重新加载数据...`);
-                        setTimeout(() => loadCategories({ ...options, retryCount: retryCount + 1 }), 1500);
+                        setTimeout(() => loadMetadata({ ...options, retryCount: retryCount + 1 }), 1500);
                     } else {
-                        showToast('系统正在连接或初始化后台，加载分类及大纲数据失败，请刷新重试', 'error');
+                        showToast('系统正在连接或初始化后台，加载题型与难度配置失败，请刷新重试', 'error');
                     }
                 });
         }
@@ -1365,17 +1326,17 @@
             }
 
             // 3. Sidebar Filter Question Type select
-            const filterQType = document.getElementById('filterQType');
-            if (filterQType) {
-                const currentVal = filterQType.value || '';
-                filterQType.innerHTML = '<option value="">全部题型</option>';
+            const filterType = document.getElementById('filterType');
+            if (filterType) {
+                const currentVal = filterType.value || '';
+                filterType.innerHTML = '<option value="">全部题型</option>';
                 systemMetadata.question_types.forEach(item => {
                     const opt = document.createElement('option');
                     opt.value = item.value;
                     opt.textContent = item.label;
-                    filterQType.appendChild(opt);
+                    filterType.appendChild(opt);
                 });
-                filterQType.value = currentVal;
+                filterType.value = currentVal;
             }
 
             // 4. Sidebar Filter Difficulty select
@@ -1453,32 +1414,6 @@
                 // Refresh update status in About tab
                 refreshAboutTabUpdateInfo();
             }
-        };
-
-        // Reset Metadata to High school math template
-        window.resetMetadataToDefault = function(version = 'A') {
-            const versionName = version === 'B' ? '人教B版' : (version === 'S' ? '苏教版' : (version === 'H' ? '沪教版' : '人教A版'));
-            if (!confirm(`确认要将所有题型、难度和学段重置为默认的【${versionName}】配置模板吗？这不会修改您的数据库题目，但会替换下方编辑框的内容（需点击保存后生效）。`)) {
-                return;
-            }
-
-            fetch('/api/config/curriculum-presets/' + encodeURIComponent(version))
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('HTTP ' + response.status);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    if (!data || !data.metadata || !data.metadata.curriculum) {
-                        throw new Error('教材大纲预设响应格式错误');
-                    }
-                    document.getElementById('settingsMetadataJson').value = JSON.stringify(data.metadata, null, 2);
-                    showToast(`已加载默认【${data.name || versionName}】配置模板，请点击最下方的 [保存配置] 按钮进行保存并应用。`);
-                })
-                .catch(error => {
-                    showToast('加载教材大纲预设失败: ' + error.message, 'error');
-                });
         };
 
         // ----------------- App Version & Update Management -----------------

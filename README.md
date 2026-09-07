@@ -21,7 +21,6 @@
 - 🎨 **1:1 A4 仿真组卷排版**：提供像 Word 一样直观的仿真试卷画布，密封线、大标题、注意事项框一应俱全。支持拖拽排序、题目留白高度调整，以及一键切换 A3 答题卡与高考 19 题预设。
 - ⚡ **秒级公式渲染与高考级导出**：内置专业数学公式排版引擎，网页上修改秒级实时预览。支持一键导出高考标准的高清 PDF 试卷与完整的排版源码包。
 - 🤖 **AI 智能组卷与辅助解答**：内置 DeepSeek 等大语言模型，能根据考点细目表与难度阶梯一键自动挑选题目生成试卷；支持单题一键 AI 生成详细解析与教学反思。
-- 📚 **主流教材大纲一键切换**：原生预设 **人教A版**、**人教B版**、**苏教版**与**沪教版**标准高中大纲目录，切换大纲时系统自动智能映射，无需手动重新整理题目。
 - 📄 **多格式试卷智能拆解与 PDF 双策略分流**：支持直接拖入 **LaTeX 源码 (.tex)**、**PDF 试卷 (.pdf)** 或 **Word 试卷 (.docx)** 快速智能切片拆题。PDF 拆解原生提供 **【原生文字公式提取】（默认推荐）** 与 **【全图视觉 OCR】** 双解析策略：推荐优先使用原生提取模式，享受 `PDF Inspector` 毫秒级 0 视觉 Token 损耗的极速提取，当遇到 Word/MathType 特殊导出卷导致公式硬转化为图片时，系统会自动平滑降级并触发 VLM 视觉 OCR 识图补全；同时，为避免极少数排版极其特殊的试卷使自愈规则失效，系统亦保留了全图视觉 OCR 的强力备选通道，保障 100% 拆解成功率。Word 导入则会结构化转换 Office OMML，并从 OLE `Equation Native` 流解析 MathType 结构，不能高置信转换的公式保留原预览图并标记人工核对。
 
 ---
@@ -60,7 +59,7 @@ flowchart LR
 ```mermaid
 flowchart LR
     Doc[试卷文档解析] --> Seg[题目切片分割]
-    Seg --> Classify[教材大纲智能分类与打标]
+    Seg --> Classify[题型与难度结构化打标]
     Classify --> Validate[结构化 JSON 容错校验]
     Validate --> Solve[异步并发 AI 解题引擎]
 ```
@@ -98,8 +97,10 @@ flowchart LR
    cd math-question-bank
    ```
 
-2. **安装依赖**（要求 Python 3.10+）：
+2. **创建并安装依赖**（要求 Python 3.10+；macOS/Homebrew Python 请使用项目虚拟环境）：
    ```bash
+   python3 -m venv venv
+   source venv/bin/activate
    python -m pip install -r requirements.txt
    ```
    参与开发或运行测试时，改用 `python -m pip install -r requirements-dev.txt`。依赖版本已锁定，升级时请同步运行测试与 `python -m pip check`。
@@ -172,7 +173,7 @@ flowchart LR
 > 完整备份是覆盖升级的首选保险。如需额外手动备份，请备份以下重要文件/目录：
 > - `*.db` (本地题目数据库)
 > - `.env` (API 密钥配置)
-> - `data_backup/` (自定义维度与章节大纲配置)
+> - `data_backup/` (自定义题型与难度维度配置)
 > - `static/uploads/` (已上传的插图与几何图形)
 
 ---
@@ -232,7 +233,7 @@ python3 -m scripts.restore data_backup/snapshots/mathbank-backup-时间戳.zip -
 │   ├── paper_helper.py         # LaTeX/PDF 编译、排版与 LRU 缓存
 │   ├── sync_helper.py          # JSON 同步导出与 AI 题库清洗
 │   ├── paths.py                # 与工作目录无关的项目路径单一来源
-│   ├── curriculums.py          # 四套教材预设加载与默认元数据
+│   ├── metadata.py             # 题型与难度默认元数据
 │   ├── prompts.py              # OCR/解题/拆卷/TikZ/组卷提示构建器
 │   ├── ai_providers.py         # AI Provider 与模型参数解析
 │   ├── ai_http.py              # AI HTTP 请求与鉴权
@@ -243,7 +244,6 @@ python3 -m scripts.restore data_backup/snapshots/mathbank-backup-时间戳.zip -
 │   ├── mtef_helper.py          # MathType OLE/MTEF v5 结构解析与失败诊断
 │   ├── docx_helper.py          # Word 文字/表格/图片安全提取与诊断报告
 │   ├── pdf_inspector_helper.py # PDF Inspector 原生矢量直提与双轨探测
-│   └── resources/curriculums/  # A/B/S/H 四套共享 JSON 大纲
 ├── scripts/                    # 运维、迁移、检索与 Release 工具
 │   ├── search_questions.py
 │   ├── backup.py

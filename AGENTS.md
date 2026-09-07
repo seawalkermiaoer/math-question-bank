@@ -6,7 +6,7 @@
 ## 2. 核心技术栈
 本项目追求极简配置与极致体验，严格遵循以下技术选型，**不要引入复杂的现代前端构建工具（如 Webpack/Vite/Node.js 生态）**：
 - **后端**：Python + FastAPI。
-- **后端渐进式模块架构**：根目录 `main.py` 继续作为 `uvicorn main:app` 兼容入口；后端领域能力统一集中在 `mathbank/`。`database.py` 提供 SQLite ORM 与 Session，`db_migrations.py` 提供版本化、备份优先的数据库迁移，`backup.py` 提供带清单校验的完整备份与恢复，`asset_security.py` 统一校验上传内容与本地资产路径，`task_manager.py` 提供有界异步任务、协作取消与临时资源生命周期，`health.py` 提供启动就绪诊断，`paper_helper.py` 提供 LaTeX/PDF 编译排版，`sync_helper.py` 只负责 JSON 同步导出与 AI 题库导出，`paths.py` 统一锚定持久化与捆绑路径。`curriculums.py` 加载四套教材 JSON，`prompts.py` 提供纯提示构建器，`ai_providers.py`、`ai_http.py`、`ai_json.py` 分别统一模型供应商解析、AI HTTP 请求与结构化输出解析。运维、迁移、检索与 Release 工具统一位于 `scripts/`，从项目根目录使用 `python3 -m scripts.<模块名>` 运行。严禁重新在根目录新增业务模块或复制供应商判断规则。
+- **后端渐进式模块架构**：根目录 `main.py` 继续作为 `uvicorn main:app` 兼容入口；后端领域能力统一集中在 `mathbank/`。`database.py` 提供 SQLite ORM 与 Session，`db_migrations.py` 提供版本化、备份优先的数据库迁移，`backup.py` 提供带清单校验的完整备份与恢复，`asset_security.py` 统一校验上传内容与本地资产路径，`task_manager.py` 提供有界异步任务、协作取消与临时资源生命周期，`health.py` 提供启动就绪诊断，`paper_helper.py` 提供 LaTeX/PDF 编译排版，`sync_helper.py` 只负责 JSON 同步导出与 AI 题库导出，`paths.py` 统一锚定持久化与捆绑路径。`metadata.py` 提供题型与难度默认值，`prompts.py` 提供纯提示构建器，`ai_providers.py`、`ai_http.py`、`ai_json.py` 分别统一模型供应商解析、AI HTTP 请求与结构化输出解析。运维、迁移、检索与 Release 工具统一位于 `scripts/`，从项目根目录使用 `python3 -m scripts.<模块名>` 运行。严禁重新在根目录新增业务模块或复制供应商判断规则。
 - **数据库**：SQLite + SQLAlchemy（轻量级，数据存储在本地 `.db` 文件中）。
 - **前端页面**：纯 HTML + 原生 JavaScript。
 - **前端脚本拆分**：前端 JS 采用无编译的“渐进式级联加载”架构，按 `api.js`、`editor.js`、`ocr.js`、`import.js`、`paper.js` 的顺序级联加载；前四个模块负责 API/全局状态、编辑与渲染、OCR 图像交互、导入拆卷，`paper.js` 负责组卷工作台。加载顺序严格依存，不允许产生任何编译及捆绑动作。
@@ -54,10 +54,6 @@
   - **LaTeX tabular 表格网格渲染**：`\begin{tabular}` 自动解析转换为现代居中、带微边框的响应式 HTML5 表格，保留 LaTeX 原生源码导出。
   - **三列比较表导出约束**：OCR 常见的简单 `|c|c|c|` 比较表在 PDF 导出时必须转换为 `\noindent tabularx`，第一列使用窄 `m{4em}`，两列正文使用等宽 `X` 自动换行；表内图片宽度受单元格 `\linewidth` 限制，并保留上下各 3pt 内边距，避免白底图片覆盖横线。不得用整表 `resizebox` 将长文本压成过小字号。
   - **LaTeX 段落与换行规范**：双回车（`\n\n+`）代表起新段落（`<br><br>`）；显式双反斜杠（`\\\\`）代表硬换行（`<br>`）；单回车仅视为空格不打断自然段。解答题小问标号（如 `(1)`、`①`）自动前置插入段落换行。
-- **教材大纲多版本预设与共存**：
-  - 快捷切换人教 A 版、人教 B 版、苏教版、沪教版标准大纲预设（`mathbank/resources/curriculums/`）。
-  - **活跃-镜像模式 (`question_curriculums`)**：存放题目在每套大纲中的分类镜像。主表字段反映当前活跃配置，切换大纲时后台自动运行增量迁移。
-  - **小节隔离自愈**：校验并清洗非法跨版小节，防止分类下拉菜单发生混排污染。
 - **全局试题序号同步 (#seq_num)**：
   - 题库卡片与 Toast 交互统一采用 SQLite 物理升序计算的纯净序号 `seq_num`（1 ~ N）展示。
   - **编辑会话状态 (`EditorState`)**：`api.js` 的 `EditorState` 是当前题目 ID、序号、草稿 ID 与编辑模式的唯一状态来源，禁止引入平行全局变量。
@@ -66,7 +62,7 @@
 - **题库列表分页契约**：`GET /api/questions` 不传 `page` 时保留历史数组响应；传入 `page` 后返回 `{items,total,page,page_size,total_pages}`，`page_size` 限制为 1–100，`sort` 仅支持 `asc` / `desc` 语义。侧栏必须使用分页响应，并以 `AbortController` 和请求序号保证最后一次请求胜出。
 - **入库前题目查重**：试卷 OCR/PDF/Word/TeX 识别、拆分和草稿编辑阶段不得自动查重；仅在用户点击单题【导入此题】、批量【导入选中题目】或普通编辑器保存时调用 `POST /api/questions/check-duplicates`。批量导入必须在任何一道题写库前完成整批预检，同时查批内与库内重复，确认后以最多 3 个并发任务逐题入库并保留部分成功语义。查重结果必须绑定 `parsedQuestionsGeneration`、客户题目标识及内容快照；题干、解析、题型或配图改变后旧结果立即失效。
 - **查重指纹与判定边界**：`question_fingerprints` 是 schema v6 引入、schema v7 将分桶索引扩展为 `(fingerprint_version, bandN, token_count)` 的可重建派生索引，指纹算法必须带 `fingerprint_version`。精确层使用保守规范化后的 SHA-256 普通索引（严禁 `UNIQUE`）；近似层使用 128-bit SimHash 拆成 8 个 16-bit 分桶索引召回有界候选，再对少量候选精排，不得全库逐题比较。schema v8 新增 8 个 `(fingerprint_version, text_bandN, token_count)` 文字片段索引：仅在精确/SimHash 候选精排后仍无需复核结果时启用，以 literal 与数字骨架 token 4-gram OPH 召回“多处小改+增删句子”题目；两阶段昂贵精排候选共享同一上限。规范化必须保留数字、变量、正负号、关系符、量词、定义域、区间开闭、选项及小问顺序；这些关键数学 token 不同时最高只能提示“可能是变式题”。数字骨架只能扩大候选召回，严禁影响 exact/critical 最终裁定。答案、解析、分类、难度、标签和来源不参与主指纹；答案差异只作为人工复核理由。可见配图按解码像素哈希提供证据，TikZ 按保守源码哈希提供证据；缺图、图不同或指纹不可用时必须标记配图待核对。
-- **查重写入与故障边界**：新建/更新题目时，`Question`、`QuestionCurriculum` 与当前版本指纹必须在同一 SQLite 事务内提交。已完成预检的请求携带 `duplicate_snapshot_hash`，写入前再复查精确指纹以关闭并发窗口；仅用户明确选择“仍作为独立题保存”时接受 `duplicate_override=independent`。查重只是可解释、可忽略的“疑似已收录”提示，严禁自动删除、自动合并或复用 `association_group_id`。查重接口/图像指纹失败时必须明示“查重暂不可用”并放行正常保存，不得伪装成“未发现重复”。旧题指纹只能在服务就绪、已完成必要备份后以小批次、可中断方式后台回填；索引未完成时 UI 必须显示覆盖率，不得声称已完整查重。
+- **查重写入与故障边界**：新建/更新题目时，`Question` 与当前版本指纹必须在同一 SQLite 事务内提交。已完成预检的请求携带 `duplicate_snapshot_hash`，写入前再复查精确指纹以关闭并发窗口；仅用户明确选择“仍作为独立题保存”时接受 `duplicate_override=independent`。查重只是可解释、可忽略的“疑似已收录”提示，严禁自动删除、自动合并或复用 `association_group_id`。查重接口/图像指纹失败时必须明示“查重暂不可用”并放行正常保存，不得伪装成“未发现重复”。旧题指纹只能在服务就绪、已完成必要备份后以小批次、可中断方式后台回填；索引未完成时 UI 必须显示覆盖率，不得声称已完整查重。
 - **数据库一致性与迁移**：SQLite 连接必须启用外键与 `busy_timeout`；本地可写文件系统优先使用经验证的 WAL，若底层不支持共享内存/WAL，则明确告警并降级为单机 `DELETE + synchronous=FULL`；WAL 与 DELETE 都无法启用时才拒绝启动。当前结构版本写入 `PRAGMA user_version`。任何结构迁移必须先生成独立、通过完整性检查且带 SHA-256 的快照，再在单事务中修复并迁移；未来版本数据库必须在任何建表、加列或建索引前拒绝启动。题目及关系写入应以一次数据库事务为成功边界，文件清理和 JSON 同步属于提交后的补偿操作，不得把已提交写入误报为失败。
 
 ### 3.2 解答与解析模块
@@ -81,7 +77,7 @@
 - **JSON 同步导出 (`data_backup/questions_backup.json`)**：后台异步导出题目字段，便于检索与兼容旧流程；它不含数据库约束和完整上传目录，**不是灾难恢复用完整备份**。
 - **可验证完整备份 (`data_backup/snapshots/mathbank-backup-*.zip`)**：通过 SQLite 在线快照保存数据库、数据库引用的 `static/uploads/` 文件及自定义元数据，并在 `manifest.json` 记录逐文件 SHA-256、大小、表计数与结构版本；明确排除 `.env`、本地 Token 和 API 密钥。创建并复验使用 `python3 -m scripts.backup`，仅验证使用 `python3 -m scripts.restore <备份.zip>`。
 - **恢复安全边界**：实际恢复必须完全关闭服务并显式运行 `python3 -m scripts.restore <备份.zip> --apply --yes`。服务在首次访问数据库前持有跨平台运行锁，恢复 API/CLI 必须持有同一把锁；锁被占用时必须停止，不得用 PID 信号探测替代。恢复前先创建已验证安全备份；若当前数据库已损坏或缺失而无法生成标准快照，则保留原数据库、WAL/SHM、上传和元数据的原始灾难恢复包，再原子替换并在失败时回滚。默认不带 `--apply` 只检查，不能修改现有数据。
-- **AI 专属只读题库 (`data_backup/questions_library.md`)**：只输出学段、章节、知识点和题干，过滤答案与点评，清洗 `\item`、`\\` 等排版命令，完全保留 `$` 公式。
+- **AI 专属只读题库 (`data_backup/questions_library.md`)**：按题型与难度两级分组只输出题干与图片，过滤答案与点评，清洗 `\item`、`\\` 等排版命令，完全保留 `$` 公式。
 - **终端检索工具 (`scripts/search_questions.py`)**：提供 CLI 工具支持模糊匹配与结构化题目拉取（运行 `python3 -m scripts.search_questions -q <关键词>`）。
 - **填空题下划线迁移工具 (`scripts/migrate_fillin.py`)**：批量规范化旧下划线格式为 `\fillin` 并刷新备份。
 
@@ -96,7 +92,7 @@
 
 ### 3.6 存储空间自愈
 - **垃圾图片清理**：删除或编辑题目发生图片变更时自动删除孤儿图片。
-- **就绪后维护**：数据库迁移、必要目录/token 与 metadata cache 仍在就绪前完成；全库教材自愈、孤儿图片清理、引用校准、每日完整备份和 XeLaTeX/Pandoc/PyMuPDF 可选探测必须在 `FastAPI lifespan` 启动、模块完整导入后转入低优先级后台线程；维护前先保留已验证备份，再做数据自愈/清理。
+- **就绪后维护**：数据库迁移、必要目录/token 与 metadata cache 仍在就绪前完成；孤儿图片清理、引用校准、每日完整备份和 XeLaTeX/Pandoc/PyMuPDF 可选探测必须在 `FastAPI lifespan` 启动、模块完整导入后转入低优先级后台线程；维护前先保留已验证备份，再做数据自愈/清理。
 
 ### 3.7 启动就绪与网络容错
 - **启动器环境与身份自愈**：macOS 包不内置 Python，运行前要求本机已安装 Python 3.10+；macOS 必须依次探测可用的 `python3` / 具名 Python 3.10+ 解释器，使用项目隔离的 `venv` 并通过 `python -m pip` 补齐锁定依赖；旧 `venv` 不兼容时先保留临时备份、自动重建，并仅在新服务通过健康检查后清理备份。Windows 便携包面向 Windows 10/11 x64，内置完整 Python 及应用本地 VC++ 运行时，无需本机另行安装。生产式双击启动不得携带 `--reload`。
@@ -163,11 +159,11 @@
 - **密钥与鉴权**：读取 `.env` 密钥，修改类接口必须携带 `X-Local-Token` 头部。
 - **模型配置**：
   - OCR 首选阿里百炼 `qwen3.7-flash` 或硅基流动 `Qwen/Qwen3-VL-8B-Instruct`（中转站推荐 `gpt-5.6-luna`）。
-  - 阿里百炼预设按任务隔离：OCR、拆卷与分类默认 `qwen3.7-flash`，解答与绘图默认 `qwen3.7-plus`，`qwen3.8-max` 仅作为高性能可选项；旧型号不再列为预设，但既有配置与自定义模型必须继续可见且不得被静默改写。
-  - **阿里百炼思考策略隔离**：仅对 `provider_code == "bailian"` 的 Qwen3.7/3.8 生效。OCR、拆卷、分类、AI 选题和 LaTeX 诊断显式关闭思考；解答服从前端开关；TikZ 绘图显式开启思考。Qwen3.7 使用 `thinking_budget`，Qwen3.8 Max 使用 `reasoning_effort=medium`，两者禁止同时发送；当前型号使用 `max_completion_tokens`，不得改变 DeepSeek、硅基流动和中转站载荷。
-  - 解答 (`PREFER_SOLVE_MODEL`)、拆卷 (`PREFER_PARSE_MODEL`)、分类 (`PREFER_CLASSIFY_MODEL`) 与绘图 (`PREFER_DRAW_MODEL`) 可单独配置。
-- **融合题自动分类优先级**：单题自动定位与拆卷分类共用 `mathbank.prompts.CLASSIFICATION_PRIORITY_RULE`。若一道题实际融合多个教材模块，按当前大纲从上到下的顺序选择最靠后的模块：先比较学段顺序，同一学段再比较章节顺序；仅作背景且解题无需使用的内容不参与候选。
-- **单题教材分类与题型确认边界**：`POST /api/ai/classify` 返回推荐学段、章节及粗粒度 `question_form`。后端硬规则优先：题干出现 `\begin{choices}` 判为 `choice`，出现 `\fillin` 判为 `fill_in_blank`；其余才采用 AI 的 `choice` / `fill_in_blank` / `detailed_answer` / `unknown` 建议。AI 严禁区分单选与多选；前端收到 `choice` 时必须由用户手动确认 `single_choice` 或 `multi_choice` 后才能保存，`unknown` 保留当前题型，禁止用缺失或未知值默认覆盖为解答题。
+  - 阿里百炼预设按任务隔离：OCR 与拆卷默认 `qwen3.7-flash`，解答与绘图默认 `qwen3.7-plus`，`qwen3.8-max` 仅作为高性能可选项；旧型号不再列为预设，但既有配置与自定义模型必须继续可见且不得被静默改写。
+  - **阿里百炼思考策略隔离**：仅对 `provider_code == "bailian"` 的 Qwen3.7/3.8 生效。OCR、拆卷、AI 选题和 LaTeX 诊断显式关闭思考；解答服从前端开关；TikZ 绘图显式开启思考。Qwen3.7 使用 `thinking_budget`，Qwen3.8 Max 使用 `reasoning_effort=medium`，两者禁止同时发送；当前型号使用 `max_completion_tokens`，不得改变 DeepSeek、硅基流动和中转站载荷。
+  - 解答 (`PREFER_SOLVE_MODEL`)、拆卷 (`PREFER_PARSE_MODEL`) 与绘图 (`PREFER_DRAW_MODEL`) 可单独配置。
+- **题型确认边界**：拆卷与导入的题型由 `PREFER_PARSE_MODEL` 在题目列表中直接返回 `single_choice` / `multi_choice` / `fill_in_blank` / `detailed_answer`，用户在拆卷卡片与编辑器中手动确认后才能入库。教材大纲定位（学段/章节/小节）与 `POST /api/ai/classify` 已在 schema v9 一并下线，不得重新引入依赖教材大纲树的提示词注入或分类镜像表。
+
 
 ## 5. 启动诊断与双平台 Release 构建
 - **启动诊断**：服务启动打印 Python 环境、PDF Inspector、PyMuPDF、XeLaTeX、Pandoc 及数据库状态。

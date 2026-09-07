@@ -457,7 +457,7 @@ sys.modules["sqlalchemy"] = sqlalchemy
 sys.modules["sqlalchemy.orm"] = orm
 
 database = types.ModuleType("mathbank.database")
-for name in ("Question", "Paper", "PaperQuestion", "QuestionCurriculum"):
+for name in ("Question", "Paper", "PaperQuestion"):
     setattr(database, name, dummy)
 sys.modules["mathbank.database"] = database
 

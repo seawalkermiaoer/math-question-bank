@@ -9,7 +9,7 @@ import zipfile
 from collections import OrderedDict
 from io import BytesIO
 from sqlalchemy.orm import Session
-from mathbank.database import Question, Paper, PaperQuestion, QuestionCurriculum
+from mathbank.database import Question, Paper, PaperQuestion
 from mathbank.paths import TEMPLATES_DIR
 from mathbank.latex_diagnostics import build_local_latex_diagnostic
 from mathbank.asset_security import AssetSecurityError, resolve_upload_asset

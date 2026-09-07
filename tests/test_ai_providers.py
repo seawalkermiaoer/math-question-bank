@@ -265,7 +265,7 @@ def test_qwen38_draw_uses_medium_effort_without_thinking_budget():
 
 @pytest.mark.parametrize(
     "task",
-    ["classify", "parse", "paper_selection", "latex_diagnostic"],
+    ["parse", "paper_selection", "latex_diagnostic"],
 )
 def test_bailian_structured_tasks_disable_thinking_and_old_token_cap(task):
     result = apply_bailian_thinking_policy(

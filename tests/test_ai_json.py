@@ -5,7 +5,6 @@ import pytest
 
 from mathbank.ai_json import parse_ai_json
 from mathbank.prompts import (
-    build_classification_system_prompt,
     build_import_parse_system_prompt,
     build_pdf_parse_system_prompt,
 )
@@ -74,10 +73,9 @@ def test_parse_ai_json_rejects_structurally_invalid_output():
 
 
 def test_paper_prompts_require_valid_json_escaping():
-    curriculum = {"必修一": {"1. 集合": []}}
     prompts = (
-        build_pdf_parse_system_prompt(curriculum, False),
-        build_import_parse_system_prompt(curriculum),
+        build_pdf_parse_system_prompt(False),
+        build_import_parse_system_prompt(),
     )
 
     for prompt in prompts:
@@ -86,32 +84,14 @@ def test_paper_prompts_require_valid_json_escaping():
         assert "字符串内部换行直接输出真实回车" not in prompt
 
 
-def test_classification_prompts_prefer_later_curriculum_module():
-    curriculum = {
-        "必修一": {"5. 三角函数": []},
-        "必修二": {"6. 平面向量及其应用": []},
-    }
+def test_paper_prompts_no_longer_reference_textbook_outline():
     prompts = (
-        build_classification_system_prompt(curriculum),
-        build_pdf_parse_system_prompt(curriculum, False),
-        build_import_parse_system_prompt(curriculum),
+        build_pdf_parse_system_prompt(False),
+        build_import_parse_system_prompt(),
     )
 
     for prompt in prompts:
-        assert "选择位置最靠后的模块作为最终分类" in prompt
-        assert "先比较学段从上到下的顺序" in prompt
-        assert "若属于同一学段，再比较章节从前到后的顺序" in prompt
-        assert "必修二的“平面向量及其应用”" in prompt
-        assert "仅作为背景条件被提及" in prompt
-
-
-def test_single_question_classification_prompt_requests_only_coarse_question_form():
-    prompt = build_classification_system_prompt({"必修一": {"1. 集合": []}})
-
-    assert '"compulsory"' in prompt
-    assert '"chapter"' in prompt
-    assert '"question_form"' in prompt
-    assert "question_type" not in prompt
-    assert "包含且仅包含以下三个 key" in prompt
-    assert "任何选择题一律为 `choice`" in prompt
-    assert "严禁输出或猜测 `single_choice`、`multi_choice`" in prompt
+        assert "教材范围" not in prompt
+        assert "category_compulsory" not in prompt
+        assert "category_chapter" not in prompt
+        assert "学段" not in prompt

@@ -396,7 +396,6 @@ def test_solution_space_controls_stay_at_the_resizable_zone_top():
 def test_static_dialogs_expose_modal_semantics_and_accessible_names():
     elements = _index_elements()
     labelled_dialogs = {
-        "aiClassifyModal": "aiClassifyModalTitle",
         "settingsModal": "settingsModalTitle",
         "updateModal": "updateModalTitle",
         "statsModal": "statsModalTitle",
@@ -452,32 +451,6 @@ def test_duplicate_review_has_accessible_decision_controls_and_live_summary():
     assert "badge.focus({ preventScroll: true })" in import_source
 
 
-def test_ai_classification_requires_manual_single_or_multi_choice_confirmation():
-    index_source = _read(INDEX_PATH)
-    import_source = _read(STATIC_JS_DIR / "import.js")
-    css_source = _read(CSS_PATH)
-
-    assert "temporaryClassifyData.question_type" not in import_source
-    assert "qtypeLabels[data.question_type]" not in import_source
-    assert "temporaryClassifyData.question_form === 'choice'" in import_source
-    assert "!temporaryClassifyQuestionType" in import_source
-    assert "请先确认此题是单选题还是多选题" in import_source
-    assert "qtypeSelect.value = temporaryClassifyQuestionType" in import_source
-    assert "window.selectClassifiedChoiceType = selectClassifiedChoiceType" in import_source
-    assert 'id="recQType"' not in index_source
-    assert 'id="choiceTypeConfirm"' in index_source
-    assert 'id="classifySingleChoiceBtn"' in index_source
-    assert 'id="classifyMultiChoiceBtn"' in index_source
-    assert 'role="radiogroup"' in index_source
-    assert index_source.count("question-type-choice-check") == 2
-    assert "已识别为选择题，请手动确认" in index_source
-    assert "确认分类并保存题目" in index_source
-    assert '.question-type-choice-button[aria-checked="true"]:hover' in css_source
-    assert 'color: #ffffff;' in css_source
-    assert '.question-type-choice-button[aria-checked="true"] .question-type-choice-check' in css_source
-    assert "button.classList.toggle('bg-brand-50'" not in import_source
-
-
 def test_modal_manager_traps_focus_handles_escape_and_restores_focus():
     api_source = _read(STATIC_JS_DIR / "api.js")
     editor_source = _read(STATIC_JS_DIR / "editor.js")
@@ -508,7 +481,7 @@ def test_modal_manager_traps_focus_handles_escape_and_restores_focus():
     assert "|| getFocusable(dialog)[0]" not in api_source
 
     assert api_source.count("window.MathBankModal.open") >= 2
-    assert editor_source.count("window.MathBankModal.open") >= 3
+    assert editor_source.count("window.MathBankModal.open") >= 2
     assert import_source.count("window.MathBankModal.open") >= 3
     assert "window.MathBankModal.open(lightbox" in ocr_source
     assert "window.MathBankModal.open(modal" in paper_source
@@ -696,7 +669,6 @@ def test_reduced_motion_dark_contrast_and_busy_feedback_are_explicit():
     assert ".finally(() =>" in editor_source
     assert 'id="toast" role="status" aria-live="polite"' in index_source
     for loading_id in (
-        "classifyLoading",
         "importLoadingState",
         "contentOcrLoadingIndicator",
         "ocrLoadingIndicator",

@@ -24,9 +24,6 @@
             show_secret: true
         },
         filters: {
-            compulsory: '',
-            chapter: '',
-            knowledge: '',
             question_type: '',
             difficulty: '',
             keyword: '',
@@ -341,18 +338,6 @@
     async function fetchBankQuestions() {
         const f = window.PaperStore.filters;
         const params = new URLSearchParams();
-        if (f.compulsory) {
-            params.append('compulsory', f.compulsory);
-            params.append('category_compulsory', f.compulsory);
-        }
-        if (f.chapter) {
-            params.append('chapter', f.chapter);
-            params.append('category_chapter', f.chapter);
-        }
-        if (f.knowledge) {
-            params.append('knowledge', f.knowledge);
-            params.append('category_knowledge', f.knowledge);
-        }
         if (f.question_type) {
             params.append('qtype', f.question_type);
             params.append('question_type', f.question_type);
@@ -394,41 +379,9 @@
         const container = document.getElementById('paperFilterSection');
         if (!container) return;
 
-        const tree = window.categoryTree || {};
         const metadata = window.systemMetadata || {};
 
-        // 1. Build Compulsory Book options
-        let bookOptions = `<option value="">-- 选择学段 --</option>`;
-        Object.keys(tree).forEach(b => {
-            bookOptions += `<option value="${escapeHtml(b)}" ${f.compulsory === b ? 'selected' : ''}>${escapeHtml(b)}</option>`;
-        });
-
-        // 2. Build Chapter options (Level 2)
-        let chapterOptions = `<option value="">-- 先选学段 --</option>`;
-        let isChapterDisabled = true;
-        if (f.compulsory && tree[f.compulsory]) {
-            isChapterDisabled = false;
-            chapterOptions = `<option value="">-- 所有章节 --</option>`;
-            Object.keys(tree[f.compulsory]).forEach(ch => {
-                chapterOptions += `<option value="${escapeHtml(ch)}" ${f.chapter === ch ? 'selected' : ''}>${escapeHtml(ch)}</option>`;
-            });
-        }
-
-        // 3. Build Knowledge options (Level 3)
-        let knowledgeOptions = `<option value="">-- 先选章节 --</option>`;
-        let isKnowledgeDisabled = true;
-        if (f.compulsory && f.chapter && tree[f.compulsory] && tree[f.compulsory][f.chapter]) {
-            isKnowledgeDisabled = false;
-            knowledgeOptions = `<option value="">-- 所有小节/知识点 --</option>`;
-            const knowList = tree[f.compulsory][f.chapter];
-            if (Array.isArray(knowList)) {
-                knowList.forEach(k => {
-                    knowledgeOptions += `<option value="${escapeHtml(k)}" ${f.knowledge === k ? 'selected' : ''}>${escapeHtml(k)}</option>`;
-                });
-            }
-        }
-
-        // 4. Build Question Type options
+        // 1. Build Question Type options
         let qTypeOptions = `<option value="">全部题型</option>`;
         const qTypes = metadata.question_types || [
             { value: 'single_choice', label: '单选题' },
@@ -440,7 +393,7 @@
             qTypeOptions += `<option value="${escapeHtml(t.value)}" ${f.question_type === t.value ? 'selected' : ''}>${escapeHtml(t.label)}</option>`;
         });
 
-        // 5. Build Difficulty options
+        // 2. Build Difficulty options
         let diffOptions = `<option value="">全部难度</option>`;
         const difficulties = metadata.difficulties || [
             { value: 'easy', label: '普通题' },
@@ -479,32 +432,7 @@
                     </div>
                 </div>
 
-                <!-- Middle Row 1: 3-Level Cascade Curriculum Dropdowns (学段 -> 章节 -> 小节/知识点) -->
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1.5 border-t border-slate-100 dark:border-slate-800/60">
-                    <div>
-                        <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-0.5">学段</label>
-                        <select id="paperFilterCompulsory" onchange="onPaperFilterChange('compulsory', this.value)"
-                            class="glass-select w-full px-2 py-1 text-xs rounded-lg">
-                            ${bookOptions}
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-0.5">章节</label>
-                        <select id="paperFilterChapter" onchange="onPaperFilterChange('chapter', this.value)" ${isChapterDisabled ? 'disabled' : ''}
-                            class="glass-select w-full px-2 py-1 text-xs rounded-lg disabled:opacity-50">
-                            ${chapterOptions}
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-0.5">小节 / 知识点</label>
-                        <select id="paperFilterKnowledge" onchange="onPaperFilterChange('knowledge', this.value)" ${isKnowledgeDisabled ? 'disabled' : ''}
-                            class="glass-select w-full px-2 py-1 text-xs rounded-lg disabled:opacity-50">
-                            ${knowledgeOptions}
-                        </select>
-                    </div>
-                </div>
-
-                <!-- Middle Row 2: Question Type, Difficulty & Search Input -->
+                <!-- Middle Row: Question Type, Difficulty & Search Input -->
                 <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     <div>
                         <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-0.5">题型</label>
@@ -551,16 +479,6 @@
     let filterDebounceTimer = null;
     window.onPaperFilterChange = function (key, value) {
         window.PaperStore.filters[key] = value;
-        
-        // Handle cascade resets
-        if (key === 'compulsory') {
-            window.PaperStore.filters.chapter = '';
-            window.PaperStore.filters.knowledge = '';
-            renderPart2FilterSection();
-        } else if (key === 'chapter') {
-            window.PaperStore.filters.knowledge = '';
-            renderPart2FilterSection();
-        }
 
         if (key === 'keyword') {
             clearTimeout(filterDebounceTimer);
@@ -657,9 +575,6 @@
                 body: JSON.stringify({
                     prompt: promptText,
                     limit: 5,
-                    compulsory: f.compulsory,
-                    chapter: f.chapter,
-                    knowledge: f.knowledge,
                     question_type: f.question_type,
                     difficulty: f.difficulty
                 })
@@ -771,7 +686,7 @@
                         <i class="fa-solid fa-folder-open"></i>
                     </div>
                     <h4 class="font-semibold text-slate-700 dark:text-slate-200 mb-1">未找到符合条件的题目</h4>
-                    <p class="text-xs text-slate-500 max-w-xs text-center">请在上方调节学段、章节、题型、难度或搜索条件。</p>
+                    <p class="text-xs text-slate-500 max-w-xs text-center">请在上方调节题型、难度或搜索条件。</p>
                 </div>
             `;
             container.innerHTML = html;
@@ -836,8 +751,6 @@
                             <span class="font-bold text-slate-800 dark:text-slate-100 text-sm">#${escapeHtml(q.seq_num !== undefined ? q.seq_num : q.id)}</span>
                             <span class="px-2 py-0.5 rounded-lg text-xs font-semibold bg-brand-50 text-brand-600 border border-brand-200/50 dark:bg-brand-900/30 dark:text-brand-200 dark:border-brand-900/50">${escapeHtml(qTypeLabel)}</span>
                             ${diffTag}
-                            ${q.category_compulsory ? `<span class="px-2 py-0.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300">${escapeHtml(q.category_compulsory)}</span>` : ''}
-                            ${q.category_chapter ? `<span class="px-2 py-0.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-500 dark:bg-slate-700/50 dark:text-slate-400">${escapeHtml(q.category_chapter)}</span>` : ''}
                             <span class="px-2 py-0.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-500 dark:bg-slate-700/50 dark:text-slate-400" title="引用次数">引用 ${escapeHtml(usageCount)} 次</span>
                         </div>
 

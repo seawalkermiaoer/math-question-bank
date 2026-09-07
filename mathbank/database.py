@@ -107,9 +107,6 @@ class Question(Base):
     id = Column(Integer, primary_key=True, index=True)
     content = Column(Text, nullable=False)  # 题干 (LaTeX + markdown)
     question_type = Column(String(50), default="single_choice", index=True)  # single_choice, multi_choice, fill_in_blank, detailed_answer
-    category_compulsory = Column(String(100), default="", index=True)  # 必修/选修/选择性必修
-    category_chapter = Column(String(100), default="", index=True)  # 章节
-    category_knowledge = Column(String(100), default="", index=True)  # 知识点
     difficulty = Column(String(50), default="medium", index=True)  # easy, medium, hard
     source = Column(String(200), default="")  # 来源
     answer_markdown = Column(Text, default="")  # 答案与解析 (LaTeX + markdown)
@@ -191,9 +188,6 @@ class Question(Base):
             "id": self.id,
             "content": self.content,
             "question_type": self.question_type,
-            "category_compulsory": self.category_compulsory,
-            "category_chapter": self.category_chapter,
-            "category_knowledge": self.category_knowledge,
             "difficulty": self.difficulty,
             "source": self.source,
             "answer_markdown": self.answer_markdown,
@@ -216,9 +210,6 @@ class Question(Base):
             "id": self.id,
             "content": self.content,
             "question_type": self.question_type,
-            "category_compulsory": self.category_compulsory,
-            "category_chapter": self.category_chapter,
-            "category_knowledge": self.category_knowledge,
             "difficulty": self.difficulty,
             "source": self.source,
             "has_answer": bool((self.answer_markdown or "").strip()),
@@ -229,39 +220,6 @@ class Question(Base):
             "tags": self.tags,
             "usage_count": self.usage_count or 0,
             "created_at": (self.created_at.isoformat() + "Z") if self.created_at else None
-        }
-
-class QuestionCurriculum(Base):
-    __tablename__ = "question_curriculums"
-
-    __table_args__ = (
-        UniqueConstraint(
-            "question_id",
-            "version_code",
-            name="uq_question_curriculum_version",
-        ),
-    )
-
-    id = Column(Integer, primary_key=True, index=True)
-    question_id = Column(
-        Integer,
-        ForeignKey("questions.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    version_code = Column(String(50), index=True, nullable=False)  # 'A', 'B', 'S'
-    compulsory = Column(String(100), default="", index=True)
-    chapter = Column(String(100), default="", index=True)
-    knowledge = Column(String(100), default="", index=True)
-
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "question_id": self.question_id,
-            "version_code": self.version_code,
-            "compulsory": self.compulsory,
-            "chapter": self.chapter,
-            "knowledge": self.knowledge
         }
 
 
@@ -551,7 +509,6 @@ def init_db():
         if existing_tables:
             upgradeable_layouts = (
                 {"questions"},
-                {"questions", "question_curriculums"},
                 LEGACY_REQUIRED_TABLES,
             )
             if current_version != 0:
@@ -572,13 +529,8 @@ def init_db():
             # before create_all can disguise the missing core columns.
             required_columns = {
                 "questions": {
-                    "id", "content", "question_type", "category_compulsory",
-                    "category_chapter", "category_knowledge", "difficulty",
+                    "id", "content", "question_type", "difficulty",
                     "source", "answer_markdown", "image_paths", "created_at",
-                },
-                "question_curriculums": {
-                    "id", "question_id", "version_code", "compulsory",
-                    "chapter", "knowledge",
                 },
                 "papers": {
                     "id", "title", "subtitle", "paper_type", "total_score",
@@ -624,7 +576,6 @@ def init_db():
             bind=engine,
             tables=[
                 Question.__table__,
-                QuestionCurriculum.__table__,
                 Paper.__table__,
                 PaperQuestion.__table__,
             ],
@@ -662,29 +613,11 @@ def init_db():
                 conn.execute(text("ALTER TABLE questions ADD COLUMN usage_count INTEGER DEFAULT 0"))
                 print("Added column 'usage_count' to questions table successfully.")
                 
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_questions_category_compulsory ON questions (category_compulsory)"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_questions_category_chapter ON questions (category_chapter)"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_questions_category_knowledge ON questions (category_knowledge)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_questions_question_type ON questions (question_type)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_questions_difficulty ON questions (difficulty)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_questions_association_group_id ON questions (association_group_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_questions_tags ON questions (tags)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_questions_usage_count ON questions (usage_count)"))
-
-            # Create indexes on question_curriculums
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_question_curriculums_lookup ON question_curriculums (version_code, compulsory, chapter, knowledge)"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_question_curriculums_qid ON question_curriculums (question_id)"))
-
-            # Auto-migrate legacy data to A-version question_curriculums
-            cursor = conn.execute(text("SELECT COUNT(*) FROM question_curriculums"))
-            count = cursor.fetchone()[0]
-            if count == 0:
-                conn.execute(text("""
-                    INSERT INTO question_curriculums (question_id, version_code, compulsory, chapter, knowledge)
-                    SELECT id, 'A', category_compulsory, category_chapter, category_knowledge
-                    FROM questions
-                """))
-                print("Successfully auto-migrated legacy question categories to A-version question_curriculums mapping.")
     except Exception as e:
         raise RuntimeError("数据库旧字段或索引迁移失败，服务已停止启动") from e
 

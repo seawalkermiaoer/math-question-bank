@@ -34,7 +34,7 @@ def search_questions(query=None, qtype=None, difficulty=None, limit=50, with_ans
 
     # Build SQL dynamically
     base_query = """
-        SELECT id, content, question_type, category_compulsory, category_chapter, category_knowledge, difficulty, source, answer_markdown, review, association_group_id, tags
+        SELECT id, content, question_type, difficulty, source, answer_markdown, review, association_group_id, tags
         FROM questions
         WHERE 1=1
     """
@@ -53,16 +53,13 @@ def search_questions(query=None, qtype=None, difficulty=None, limit=50, with_ans
     if query:
         base_query += """
             AND (
-                category_compulsory LIKE ? OR
-                category_chapter LIKE ? OR
-                category_knowledge LIKE ? OR
                 content LIKE ? OR
                 source LIKE ? OR
                 tags LIKE ?
             )
         """
         like_query = f"%{query}%"
-        params.extend([like_query, like_query, like_query, like_query, like_query, like_query])
+        params.extend([like_query, like_query, like_query])
 
     if qtype:
         base_query += " AND question_type = ?"
@@ -107,7 +104,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Fuzzy query tool to fetch mathematical questions from local SQLite DB for AI referencing."
     )
-    parser.add_argument("-q", "--query", type=str, help="Search term (fuzzy matches compulsory, chapter, knowledge, content, etc.)")
+    parser.add_argument("-q", "--query", type=str, help="Search term (fuzzy matches content, source, tags)")
     parser.add_argument("-t", "--type", type=str, choices=["single_choice", "multi_choice", "fill_in_blank", "detailed_answer"], help="Filter by question type")
     parser.add_argument("-d", "--difficulty", type=str, choices=["easy", "medium", "hard"], help="Filter by difficulty")
     parser.add_argument("-n", "--limit", type=int, default=50, help="Max number of questions to return. Use -1 for no limit (default: 50)")
@@ -139,11 +136,9 @@ def main():
     print(f"{title_msg}\n")
     
     for idx, row in enumerate(results, 1):
-        q_id, content, question_type, compulsory, chapter, knowledge, difficulty, source, answer, review, group_id, tags = row
+        q_id, content, question_type, difficulty, source, answer, review, group_id, tags = row
         
         print(f"### 题目 {idx} (ID: #{q_id})")
-        print(f"- **分类学段**: `{compulsory or '未分类'}`")
-        print(f"- **章节知识点**: `{chapter or '无'}` -> `{knowledge or '无'}`")
         print(f"- **题型/难度**: {format_type(question_type)} | {format_difficulty(difficulty)}")
         if source:
             print(f"- **来源**: *{source}*")

@@ -14,18 +14,26 @@ from pathlib import Path
 
 from sqlalchemy import inspect
 from sqlalchemy.engine import Engine
+from sqlalchemy.schema import CreateTable
 
 from mathbank.paths import SCHEMA_SNAPSHOT_DIR
 
 
-LATEST_SCHEMA_VERSION = 8
+LATEST_SCHEMA_VERSION = 9
 LEGACY_REQUIRED_TABLES = {
     "questions",
-    "question_curriculums",
     "papers",
     "paper_questions",
 }
 REQUIRED_TABLES = LEGACY_REQUIRED_TABLES | {"question_fingerprints"}
+
+# Schema v9 retired the textbook-outline feature.  ``category_compulsory``
+# carried 学段, ``category_chapter`` 章节 and ``category_knowledge`` 小节.
+CURRICULUM_QUESTION_COLUMNS = (
+    "category_compulsory",
+    "category_chapter",
+    "category_knowledge",
+)
 
 V6_QUESTION_FINGERPRINT_COLUMNS = {
     "question_id",
@@ -437,56 +445,8 @@ def _rebuild_relationship_tables(engine: Engine) -> dict[str, int]:
         try:
             connection.exec_driver_sql("BEGIN IMMEDIATE")
             transaction_started = True
-            before_curriculums = int(
-                connection.exec_driver_sql("SELECT COUNT(*) FROM question_curriculums").scalar_one()
-            )
             before_paper_questions = int(
                 connection.exec_driver_sql("SELECT COUNT(*) FROM paper_questions").scalar_one()
-            )
-
-            connection.exec_driver_sql("DROP TABLE IF EXISTS question_curriculums__new")
-            connection.exec_driver_sql(
-                """
-                CREATE TABLE question_curriculums__new (
-                    id INTEGER NOT NULL PRIMARY KEY,
-                    question_id INTEGER NOT NULL,
-                    version_code VARCHAR(50) NOT NULL,
-                    compulsory VARCHAR(100) DEFAULT '',
-                    chapter VARCHAR(100) DEFAULT '',
-                    knowledge VARCHAR(100) DEFAULT '',
-                    CONSTRAINT uq_question_curriculum_version
-                        UNIQUE (question_id, version_code),
-                    CONSTRAINT fk_question_curriculums_question
-                        FOREIGN KEY(question_id) REFERENCES questions(id) ON DELETE CASCADE
-                )
-                """
-            )
-            connection.exec_driver_sql(
-                """
-                INSERT INTO question_curriculums__new
-                    (id, question_id, version_code, compulsory, chapter, knowledge)
-                SELECT qc.id, qc.question_id, qc.version_code,
-                       qc.compulsory, qc.chapter, qc.knowledge
-                FROM question_curriculums AS qc
-                JOIN questions AS q ON q.id = qc.question_id
-                JOIN (
-                    SELECT question_id, version_code, MAX(id) AS keep_id
-                    FROM question_curriculums
-                    GROUP BY question_id, version_code
-                ) AS newest ON newest.keep_id = qc.id
-                """
-            )
-            connection.exec_driver_sql("DROP TABLE question_curriculums")
-            connection.exec_driver_sql(
-                "ALTER TABLE question_curriculums__new RENAME TO question_curriculums"
-            )
-            connection.exec_driver_sql(
-                "CREATE INDEX idx_question_curriculums_lookup "
-                "ON question_curriculums (version_code, compulsory, chapter, knowledge)"
-            )
-            connection.exec_driver_sql(
-                "CREATE INDEX idx_question_curriculums_qid "
-                "ON question_curriculums (question_id)"
             )
 
             connection.exec_driver_sql("DROP TABLE IF EXISTS paper_questions__new")
@@ -547,9 +507,6 @@ def _rebuild_relationship_tables(engine: Engine) -> dict[str, int]:
                 """
             )
 
-            remaining_curriculums = int(
-                connection.exec_driver_sql("SELECT COUNT(*) FROM question_curriculums").scalar_one()
-            )
             remaining_paper_questions = int(
                 connection.exec_driver_sql("SELECT COUNT(*) FROM paper_questions").scalar_one()
             )
@@ -564,7 +521,6 @@ def _rebuild_relationship_tables(engine: Engine) -> dict[str, int]:
             connection.exec_driver_sql("COMMIT")
             transaction_started = False
             stats = {
-                "removed_question_curriculums": before_curriculums - remaining_curriculums,
                 "removed_paper_questions": before_paper_questions - remaining_paper_questions,
                 "added_question_fingerprints": added_question_fingerprints,
                 **tikz_column_stats,
@@ -674,6 +630,122 @@ def _upgrade_v6_or_v7_fingerprint_schema(
             raise
 
 
+def _remove_curriculum_schema(engine: Engine) -> dict[str, int]:
+    """Drop the retired textbook-outline columns and mirror table.
+
+    Idempotent by design: a database already rebuilt without them returns
+    without opening a write transaction, which lets ``migrate_database``
+    re-run this step as a crash self-heal.
+    """
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    question_columns = {
+        column["name"] for column in inspector.get_columns("questions")
+    }
+    dropped_columns = [
+        name for name in CURRICULUM_QUESTION_COLUMNS if name in question_columns
+    ]
+    had_mirror_table = "question_curriculums" in tables
+    if not dropped_columns and not had_mirror_table:
+        return {"dropped_question_columns": 0, "dropped_question_curriculums": 0}
+
+    # Imported lazily: mathbank.database imports this module from init_db().
+    from mathbank.database import Question
+
+    # Columns absent here are backfilled by init_db's own ALTER pass; this step
+    # only owns the retired outline schema and copies whatever is in common.
+    carried_columns = [
+        column.name
+        for column in Question.__table__.columns
+        if column.name in question_columns
+        and column.name not in CURRICULUM_QUESTION_COLUMNS
+    ]
+
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+        transaction_started = False
+        try:
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+            transaction_started = True
+
+            if dropped_columns:
+                # Dropping the table also drops its indexes.  Capture the
+                # surviving definitions verbatim so both the ORM
+                # ``ix_questions_*`` set and the hand-written
+                # ``idx_questions_*`` set are restored after the rename.
+                preserved_indexes = [
+                    sql
+                    for (sql,) in connection.exec_driver_sql(
+                        "SELECT sql FROM sqlite_master WHERE type='index' "
+                        "AND tbl_name='questions' AND sql IS NOT NULL"
+                    ).fetchall()
+                    if not any(
+                        column in sql for column in CURRICULUM_QUESTION_COLUMNS
+                    )
+                ]
+                before_count = int(
+                    connection.exec_driver_sql(
+                        "SELECT COUNT(*) FROM questions"
+                    ).scalar_one()
+                )
+
+                create_new = str(
+                    CreateTable(Question.__table__).compile(dialect=engine.dialect)
+                ).replace(
+                    "CREATE TABLE questions",
+                    "CREATE TABLE questions__new",
+                    1,
+                )
+                connection.exec_driver_sql("DROP TABLE IF EXISTS questions__new")
+                connection.exec_driver_sql(create_new)
+                column_list = ", ".join(f'"{name}"' for name in carried_columns)
+                connection.exec_driver_sql(
+                    f"INSERT INTO questions__new ({column_list}) "
+                    f"SELECT {column_list} FROM questions"
+                )
+                connection.exec_driver_sql("DROP TABLE questions")
+                connection.exec_driver_sql(
+                    "ALTER TABLE questions__new RENAME TO questions"
+                )
+                for sql in preserved_indexes:
+                    connection.exec_driver_sql(sql)
+
+                after_count = int(
+                    connection.exec_driver_sql(
+                        "SELECT COUNT(*) FROM questions"
+                    ).scalar_one()
+                )
+                if after_count != before_count:
+                    raise RuntimeError(
+                        f"重建 questions 后行数发生变化: {before_count} -> {after_count}"
+                    )
+
+            connection.exec_driver_sql("DROP TABLE IF EXISTS question_curriculums")
+
+            violations = connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise RuntimeError(
+                    f"移除教材大纲字段后仍存在外键异常: {violations[:5]}"
+                )
+            connection.exec_driver_sql(f"PRAGMA user_version={LATEST_SCHEMA_VERSION}")
+            connection.exec_driver_sql("COMMIT")
+            transaction_started = False
+            return {
+                "dropped_question_columns": len(dropped_columns),
+                "dropped_question_curriculums": 1 if had_mirror_table else 0,
+            }
+        except Exception:
+            if transaction_started:
+                connection.exec_driver_sql("ROLLBACK")
+            raise
+        finally:
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            enabled = int(connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one())
+            if enabled != 1:
+                raise RuntimeError("迁移连接未能恢复 SQLite 外键检查")
+
+
 def migrate_database(
     engine: Engine,
     *,
@@ -693,7 +765,17 @@ def migrate_database(
             raise RuntimeError(f"数据库结构不完整，缺少必要数据表: {missing}")
         with engine.connect() as connection:
             _validate_question_fingerprint_schema(connection)
-        return {"from_version": current, "to_version": current, "backup": None}
+        # The versioned upgrades stamp user_version inside their own transaction,
+        # so a crash after that stamp would otherwise strand a v9 database that
+        # still carries the retired outline schema.  This call is a no-op once the
+        # database is clean.
+        curriculum_stats = _remove_curriculum_schema(engine)
+        return {
+            "from_version": current,
+            "to_version": current,
+            "backup": None,
+            **curriculum_stats,
+        }
 
     if not table_names:
         # A caller may version an empty database immediately before creating the
@@ -717,6 +799,9 @@ def migrate_database(
         )
     else:
         stats = _upgrade_derived_schema(engine)
+    # Every upgrade path stops at the retired outline schema, so drop it last
+    # for v0-v8 databases alike.
+    stats.update(_remove_curriculum_schema(engine))
     return {
         "from_version": current,
         "to_version": LATEST_SCHEMA_VERSION,

@@ -21,45 +21,6 @@ ILLUSTRATION_BOX_PROMPT = (
 )
 
 
-CLASSIFICATION_PRIORITY_RULE = (
-    "多模块融合题定位：先识别解题过程中实际参与推导的全部教材模块；若涉及两个或以上候选模块，"
-    "必须按上方教材大纲的排列顺序，选择位置最靠后的模块作为最终分类。先比较学段从上到下的顺序，"
-    "若属于同一学段，再比较章节从前到后的顺序；不得按考点在题干中的出现先后、篇幅多少或主次印象决定。"
-    "例如一道题同时实质考查必修一“三角函数”和必修二“平面向量及其应用”，最终必须定位到必修二的"
-    "“平面向量及其应用”。仅作为背景条件被提及、且解题无需使用的内容不计入候选模块。"
-)
-
-
-def build_curriculum_text(curriculum: dict) -> str:
-    """Render the active curriculum as a compact prompt fragment."""
-
-    lines = []
-    for book, chapters in curriculum.items():
-        lines.append(f"- {book}: {list(chapters.keys())}")
-    return "\n".join(lines) + ("\n" if lines else "")
-
-
-def build_classification_system_prompt(curriculum: dict) -> str:
-    curriculum_text = build_curriculum_text(curriculum)
-    return (
-        "你是一个专门为教材分类的 AI 专家。请分析以下输入的题目，将其归入特定的教材体系中。\n"
-        "【可选教材范围及各章名称】:\n"
-        f"{curriculum_text}\n"
-        "【分类规则】:\n"
-        "1. 仔细阅读并推导题目考点。\n"
-        "2. 必须在上面的可选教材范围中为本题挑选最合适的一个【学段】（例如：必修一）和一个【所属章节】（例如：5. 三角函数，必须是可选章节中的精确字符串）。\n"
-        f"3. {CLASSIFICATION_PRIORITY_RULE}\n"
-        "4. 只判定粗粒度题型 `question_form`：填空题为 `fill_in_blank`，解答题为 `detailed_answer`，任何选择题一律为 `choice`，无法可靠判断时为 `unknown`。严禁输出或猜测 `single_choice`、`multi_choice`、单选题、多选题。题干出现 `\\fillin` 时应判为填空题，出现 `\\begin{choices}` 时应判为选择题。\n"
-        "5. 你的输出必须是一个合法的 JSON 字符串，包含且仅包含以下三个 key，不要有任何多余的 Markdown 标记、代码块或解释文字：\n"
-        "{\n"
-        '  "compulsory": "学段名称",\n'
-        '  "chapter": "具体章节名称",\n'
-        '  "question_form": "choice / fill_in_blank / detailed_answer / unknown"\n'
-        "}\n"
-        "不要包含 ```json ``` 标记，只输出最干净的 JSON。"
-    )
-
-
 def build_ai_solve_prompts(
     question_type: str,
     content: str,
@@ -169,9 +130,7 @@ def build_paper_selection_prompts(
     return system_prompt, user_content
 
 
-def build_pdf_parse_system_prompt(curriculum: dict, generate_answers_bool: bool) -> str:
-    curriculum_text = build_curriculum_text(curriculum)
-    
+def build_pdf_parse_system_prompt(generate_answers_bool: bool) -> str:
     if generate_answers_bool:
         answer_rule = (
             "【答案提取与生成规则】:\n"
@@ -187,11 +146,8 @@ def build_pdf_parse_system_prompt(curriculum: dict, generate_answers_bool: bool)
 
     system_instructions = (
         "你是一位资深高中数学教研专家与 LaTeX 排版大师。请阅读输入的试卷源码，智能切分为题目列表 JSON。\n\n"
-        "【可选教材范围与章节】:\n"
-        f"{curriculum_text}\n"
         "【核心拆题与分类规范】:\n"
-        "1. 字段分类：挑选精确匹配的学段 `category_compulsory` 与章节 `category_chapter`；题型 `question_type`（single_choice / multi_choice / fill_in_blank / detailed_answer）；难度 `difficulty`（easy_error / challenge / qiangji）；剥离题号与出处信息（如 2024·全国·高考真题）填入 `source`。\n"
-        f"1.1 {CLASSIFICATION_PRIORITY_RULE}\n"
+        "1. 字段分类：题型 `question_type`（single_choice / multi_choice / fill_in_blank / detailed_answer）；难度 `difficulty`（easy_error / challenge / qiangji）；剥离题号与出处信息（如 2024·全国·高考真题）填入 `source`。\n"
         "2. 文字与插图忠实保留：100% 完整保留题干所有汉字，绝对禁止删除“（如图）”、“如图所示”、“如右图所示”等几何指代描述！绝对保留 Markdown/LaTeX 原有的图片链接（如 `![](/static/uploads/...)` 或 `\\includegraphics{...}`），并将其 URL/文件名提取至 `referenced_images` 数组中。如输入中出现 `[公式待核对]`、`[公式结构待核对]`、`[特殊字符待核对]` 或“公式无法安全提取”，必须原样保留标记及紧随的预览图，绝不得猜测、补写或替换公式。\n"
         "2.1 公式锁定协议：若正文出现 `<mathbank-math id=\"MBM_...\">完整公式</mathbank-math>`，标签内公式在原位置完整可见，可用于理解、分类和解题，但它是只读来源。输出题干或原版答案时，必须在同一语义位置将每个标签替换为且仅替换为一次 `[[对应的完整 id]]`，例如 `[[MBM_xxx_0001]]`；禁止遗漏、重复、改名或把同一 id 放入多个题目。若需要生成新解析，可另写普通 LaTeX 公式，但不得在新解析中重复这些锁定 id。\n"
         "3. 公式格式化与排版环境：选择题选项统一格式化为 `\\begin{choices} \\item ... \\end{choices}` 环境；填空题下划线统一使用标准的 `\\fillin` 宏；文本加粗必须使用 `\\textbf{...}`（严禁双星号 `**`）。\n"
@@ -208,8 +164,6 @@ def build_pdf_parse_system_prompt(curriculum: dict, generate_answers_bool: bool)
         '      "content": "纯净题干（包含 LaTeX 排版与图片标记）",\n'
         '      "answer_markdown": "答案与解析",\n'
         '      "question_type": "single_choice / multi_choice / fill_in_blank / detailed_answer",\n'
-        '      "category_compulsory": "学段名称",\n'
-        '      "category_chapter": "章节名称",\n'
         '      "difficulty": "easy_error / challenge / qiangji",\n'
         '      "source": "出处信息或 null",\n'
         '      "referenced_images": ["/static/uploads/xxx.png"]\n'
@@ -220,9 +174,9 @@ def build_pdf_parse_system_prompt(curriculum: dict, generate_answers_bool: bool)
     return system_instructions
 
 
-def build_import_parse_system_prompt(curriculum: dict) -> str:
+def build_import_parse_system_prompt() -> str:
     """Prompt for pasted and uploaded single-file TeX paper parsing."""
-    return build_pdf_parse_system_prompt(curriculum, generate_answers_bool=False) + (
+    return build_pdf_parse_system_prompt(generate_answers_bool=False) + (
         "\n【单文件 TeX 源码专项规则】:\n"
         "1. 输入已由本地预处理器提取 document 正文并清除普通注释；不得把 documentclass、usepackage、页眉页脚或宏定义上下文当成题目。\n"
         "2. 识别 question/problem/exercise/enumerate/item、parts/subparts/part、choices/choice/CorrectChoice、tasks/task 等常见结构。每个顶层题目只输出一次，小问必须保留在所属大题内。\n"

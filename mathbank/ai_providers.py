@@ -51,7 +51,7 @@ def inject_reasoning_effort(
 
 
 _BAILIAN_NO_THINKING_TASKS = frozenset(
-    {"classify", "parse", "paper_selection", "latex_diagnostic"}
+    {"parse", "paper_selection", "latex_diagnostic"}
 )
 
 

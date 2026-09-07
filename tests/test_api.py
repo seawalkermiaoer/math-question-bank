@@ -97,9 +97,6 @@ def test_api_questions_crud(client):
     payload = {
         "content": "测试API题目干 $a^2+b^2=c^2$",
         "question_type": "single_choice",
-        "category_compulsory": "必修一",
-        "category_chapter": "第一章",
-        "category_knowledge": "勾股定理",
         "difficulty": "medium",
         "source": "单元测试",
         "answer_markdown": "答案解析内容",
@@ -116,7 +113,6 @@ def test_api_questions_crud(client):
     assert created_q["id"] is not None
     assert created_q["content"] == payload["content"]
     assert created_q["question_type"] == "single_choice"
-    assert created_q["category_compulsory"] == "必修一"
     
     question_id = created_q["id"]
 
@@ -129,7 +125,7 @@ def test_api_questions_crud(client):
     assert fetched_q["review"] == "评述内容"
 
     # 4. Filter list of questions
-    response = client.get("/api/questions?compulsory=必修一&difficulty=medium")
+    response = client.get("/api/questions?difficulty=medium")
     assert response.status_code == 200
     assert len(response.json()) == 1
     assert response.json()[0]["id"] == question_id
@@ -137,7 +133,7 @@ def test_api_questions_crud(client):
     assert "answer_markdown" not in response.json()[0]
 
     # Filter with mismatching criteria
-    response = client.get("/api/questions?compulsory=必修一&difficulty=hard")
+    response = client.get("/api/questions?difficulty=hard")
     assert response.status_code == 200
     assert len(response.json()) == 0
 
@@ -192,69 +188,6 @@ def test_questions_support_bounded_server_pagination_without_breaking_legacy_arr
     assert len(legacy.json()) == 25
 
 
-def test_api_categories(client):
-    # GET categories should return category options
-    response = client.get("/api/categories")
-    assert response.status_code == 200
-    assert isinstance(response.json(), dict)
-
-
-def test_ai_classify_returns_coarse_form_without_question_type():
-    provider = SimpleNamespace(
-        api_key="test-key",
-        api_base="https://example.invalid/v1",
-        model_name="test-model",
-        credential_label="test-provider",
-        reasoning_effort=None,
-        provider_code="test",
-    )
-    response = MagicMock()
-    response.json.return_value = {
-        "choices": [
-            {
-                "message": {
-                    "content": json.dumps(
-                        {
-                            "compulsory": "必修一",
-                            "chapter": "1. 集合",
-                            "question_form": "single_choice",
-                        },
-                        ensure_ascii=False,
-                    )
-                }
-            }
-        ]
-    }
-
-    with patch("main.resolve_text_provider", return_value=provider), patch(
-        "main.post_chat_completion", return_value=response
-    ), patch(
-        "main.get_current_curriculum", return_value={"必修一": {"1. 集合": []}}
-    ):
-        from main import ai_classify
-
-        ai_result = ai_classify("设集合 $A=\\{1,2\\}$，判断下列说法。")
-        fillin_result = ai_classify("实数 $a$ 的取值范围为\\fillin")
-        choices_result = ai_classify(
-            "下列结论正确的是\\begin{choices}\\item A\\item B\\end{choices}"
-        )
-
-    assert ai_result == {
-        "status": "success",
-        "compulsory": "必修一",
-        "chapter": "1. 集合",
-        "question_form": "choice",
-        "question_form_source": "ai",
-    }
-    assert fillin_result["question_form"] == "fill_in_blank"
-    assert fillin_result["question_form_source"] == "structure"
-    assert choices_result["question_form"] == "choice"
-    assert choices_result["question_form_source"] == "structure"
-    assert "question_type" not in ai_result
-    assert "question_type" not in fillin_result
-    assert "question_type" not in choices_result
-
-
 def test_api_stats(client):
     # GET stats should return correct question counts
     response = client.get("/api/stats")
@@ -273,9 +206,6 @@ def test_api_search_by_review(client):
     payload = {
         "content": "这是一道特殊的代数题",
         "question_type": "single_choice",
-        "category_compulsory": "必修一",
-        "category_chapter": "第一章",
-        "category_knowledge": "勾股定理",
         "difficulty": "medium",
         "source": "单元测试",
         "answer_markdown": "答案解析内容",
@@ -326,7 +256,7 @@ def test_api_metadata_config(client):
     data = response.json()
     assert "question_types" in data
     assert "difficulties" in data
-    assert "curriculum" in data
+    assert "curriculum" not in data
 
     # 保存原始配置以便还原
     original_config = data
@@ -336,7 +266,6 @@ def test_api_metadata_config(client):
         test_payload = {
             "question_types": [{"value": "test_type", "label": "测试题型"}],
             "difficulties": [{"value": "test_diff", "label": "测试难度", "color": "color-test"}],
-            "curriculum": {"测试学段": {"测试章节": ["测试小节"]}}
         }
         response = client.post("/api/config/metadata", json=test_payload)
         assert response.status_code == 403
@@ -351,24 +280,19 @@ def test_api_metadata_config(client):
         assert response.status_code == 200
         new_data = response.json()
         assert new_data["question_types"][0]["value"] == "test_type"
-        assert new_data["curriculum"]["测试学段"]["测试章节"] == ["测试小节"]
+        assert set(new_data) == {"question_types", "difficulties"}
     finally:
         # 5. Restore original config
         client.post("/api/config/metadata", json=original_config, headers=headers)
 
 
-def test_curriculum_preset_api(client):
-    for version in ("A", "B", "S", "H"):
-        response = client.get(f"/api/config/curriculum-presets/{version}")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["version"] == version
-        assert data["name"]
-        assert data["metadata"]["curriculum"]
-
-    response = client.get("/api/config/curriculum-presets/unknown")
-    assert response.status_code == 404
-
+def test_retired_outline_endpoints_are_gone(client):
+    for path in (
+        "/api/categories",
+        "/api/config/curriculum-presets/A",
+        "/api/ai/classify",
+    ):
+        assert client.get(path).status_code == 404
 
 def test_pdf_task_and_crop(client):
     headers = {"X-Local-Token": LOCAL_TOKEN}
@@ -573,9 +497,6 @@ def test_figure_align_api(client):
     payload = {
         "content": "插图排版测试题目 $x+y$",
         "question_type": "single_choice",
-        "category_compulsory": "必修一",
-        "category_chapter": "集合",
-        "category_knowledge": "集合的含义",
         "difficulty": "easy",
         "source": "单元测试",
         "answer_markdown": "答案",
@@ -666,9 +587,6 @@ def test_question_persists_editable_tikz_assets_and_original_reference(client):
             f"\n\n![TikZ]({content_second_path})"
         ),
         "question_type": "detailed_answer",
-        "category_compulsory": "必修一",
-        "category_chapter": "几何",
-        "category_knowledge": "线段",
         "difficulty": "medium",
         "answer_markdown": f"![TikZ 几何图]({image_path})",
         "image_paths": json.dumps([

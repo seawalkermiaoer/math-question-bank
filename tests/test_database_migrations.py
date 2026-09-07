@@ -172,7 +172,7 @@ def test_migration_repairs_legacy_relationships_and_adds_constraints(tmp_path, m
 
     assert result["from_version"] == 0
     assert result["to_version"] == db_migrations.LATEST_SCHEMA_VERSION
-    assert result["removed_question_curriculums"] == 2
+    assert result["dropped_question_curriculums"] == 1
     assert result["removed_paper_questions"] == 2
     assert result["backup"]
     assert list((backup_dir / "schema_snapshots").glob("*.sha256"))
@@ -183,8 +183,9 @@ def test_migration_repairs_legacy_relationships_and_adds_constraints(tmp_path, m
             db_migrations.LATEST_SCHEMA_VERSION
         )
         assert connection.execute(
-            "SELECT id, compulsory FROM question_curriculums"
-        ).fetchall() == [(2, "new")]
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name='question_curriculums'"
+        ).fetchall() == []
         assert connection.execute(
             "SELECT id, score FROM paper_questions"
         ).fetchall() == [(2, 10)]
@@ -193,14 +194,7 @@ def test_migration_repairs_legacy_relationships_and_adds_constraints(tmp_path, m
         ).fetchone()[0] == 10
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
-        with pytest.raises(sqlite3.IntegrityError):
-            connection.execute(
-                "INSERT INTO question_curriculums "
-                "(question_id, version_code) VALUES (1, 'A')"
-            )
-
         connection.execute("DELETE FROM questions WHERE id = 1")
-        assert connection.execute("SELECT COUNT(*) FROM question_curriculums").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM paper_questions").fetchone()[0] == 0
 
 
@@ -340,7 +334,7 @@ def test_version_six_rebuilds_band_indexes_transactionally(tmp_path, monkeypatch
     result = db_migrations.migrate_database(engine)
 
     assert result["from_version"] == 6
-    assert result["to_version"] == 8
+    assert result["to_version"] == db_migrations.LATEST_SCHEMA_VERSION
     assert result["rebuilt_question_fingerprint_indexes"] == 8
     assert result["added_question_fingerprint_text_columns"] == 8
     assert result["added_question_fingerprint_text_indexes"] == 8
@@ -348,7 +342,9 @@ def test_version_six_rebuilds_band_indexes_transactionally(tmp_path, monkeypatch
     assert list(snapshot_dir.glob("*.db"))
     assert list(snapshot_dir.glob("*.sha256"))
     with _sqlite_connection(database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == (
+            db_migrations.LATEST_SCHEMA_VERSION
+        )
         assert connection.execute(
             "SELECT exact_hash, token_count, band0, band7, text_band0, "
             "text_band7, status "
@@ -387,7 +383,9 @@ def test_init_db_upgrades_v6_indexes_without_create_all_masking_them(
     database_module.init_db()
 
     with _sqlite_connection(database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == (
+            db_migrations.LATEST_SCHEMA_VERSION
+        )
         for index_name, expected_columns in (
             db_migrations.QUESTION_FINGERPRINT_INDEXES.items()
         ):
@@ -455,7 +453,7 @@ def test_version_seven_adds_text_bands_transactionally(tmp_path, monkeypatch):
     result = db_migrations.migrate_database(engine)
 
     assert result["from_version"] == 7
-    assert result["to_version"] == 8
+    assert result["to_version"] == db_migrations.LATEST_SCHEMA_VERSION
     assert result["rebuilt_question_fingerprint_indexes"] == 0
     assert result["added_question_fingerprint_text_columns"] == 8
     assert result["added_question_fingerprint_text_indexes"] == 8
@@ -463,7 +461,9 @@ def test_version_seven_adds_text_bands_transactionally(tmp_path, monkeypatch):
     assert list(snapshot_dir.glob("*.db"))
     assert list(snapshot_dir.glob("*.sha256"))
     with _sqlite_connection(database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == (
+            db_migrations.LATEST_SCHEMA_VERSION
+        )
         table_info = connection.execute(
             'PRAGMA table_info("question_fingerprints")'
         ).fetchall()
@@ -828,7 +828,7 @@ def test_migration_ddl_failure_rolls_back_original_schema(tmp_path, monkeypatch)
     engine = create_engine(f"sqlite:///{database_path}")
 
     def inject_failure(_conn, _cursor, statement, _parameters, _context, _many):
-        if "ALTER TABLE question_curriculums__new RENAME" in statement:
+        if "ALTER TABLE paper_questions__new RENAME" in statement:
             raise RuntimeError("injected migration failure")
 
     event.listen(engine, "before_cursor_execute", inject_failure)
@@ -852,6 +852,63 @@ def test_migration_ddl_failure_rolls_back_original_schema(tmp_path, monkeypatch)
         }
         assert "question_curriculums__new" not in table_names
         assert "paper_questions__new" not in table_names
+
+
+def test_curriculum_removal_rolls_back_when_the_rebuild_fails(tmp_path):
+    database_path = tmp_path / "outline-crash-safe.db"
+    _create_legacy_database(database_path)
+    engine = create_engine(f"sqlite:///{database_path}")
+    db_migrations.migrate_database(engine, pre_migration_backup=None)
+
+    with _sqlite_connection(database_path) as connection:
+        connection.executescript(
+            """
+            ALTER TABLE questions ADD COLUMN category_compulsory VARCHAR(100);
+            ALTER TABLE questions ADD COLUMN category_chapter VARCHAR(100);
+            ALTER TABLE questions ADD COLUMN category_knowledge VARCHAR(100);
+            CREATE TABLE question_curriculums (
+                id INTEGER PRIMARY KEY,
+                question_id INTEGER NOT NULL,
+                version_code VARCHAR(50) NOT NULL,
+                compulsory VARCHAR(100) DEFAULT '',
+                chapter VARCHAR(100) DEFAULT '',
+                knowledge VARCHAR(100) DEFAULT ''
+            );
+            INSERT INTO question_curriculums VALUES (1, 1, 'A', '必修一', '第一章', '集合');
+            """
+        )
+    engine.dispose()
+
+    engine = create_engine(f"sqlite:///{database_path}")
+
+    def inject_failure(_conn, _cursor, statement, _parameters, _context, _many):
+        if "ALTER TABLE questions__new RENAME" in statement:
+            raise RuntimeError("injected outline removal failure")
+
+    event.listen(engine, "before_cursor_execute", inject_failure)
+    try:
+        with pytest.raises(RuntimeError, match="injected outline removal failure"):
+            db_migrations._remove_curriculum_schema(engine)
+    finally:
+        event.remove(engine, "before_cursor_execute", inject_failure)
+
+    with _sqlite_connection(database_path) as connection:
+        question_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(questions)").fetchall()
+        }
+        assert question_columns.issuperset(db_migrations.CURRICULUM_QUESTION_COLUMNS)
+        assert connection.execute(
+            "SELECT compulsory FROM question_curriculums WHERE id = 1"
+        ).fetchone()[0] == "必修一"
+        table_names = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert "questions__new" not in table_names
+    engine.dispose()
 
 
 def test_migration_refuses_partially_missing_schema(tmp_path):
@@ -981,9 +1038,15 @@ def test_init_db_upgrades_known_questions_only_legacy_layouts(
             ).fetchall()
         }
         assert db_migrations.REQUIRED_TABLES.issubset(table_names)
+        assert "question_curriculums" not in table_names
+        question_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(questions)").fetchall()
+        }
+        assert question_columns.isdisjoint(db_migrations.CURRICULUM_QUESTION_COLUMNS)
         assert connection.execute(
-            "SELECT question_id, version_code FROM question_curriculums"
-        ).fetchall() == [(1, "A")]
+            "SELECT content FROM questions WHERE id = 1"
+        ).fetchone()[0] == "历史题目"
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
     assert list(snapshot_dir.glob("*.db"))
     assert list(snapshot_dir.glob("*.sha256"))

@@ -141,22 +141,20 @@ def generate_markdown_library(questions, filepath: str):
     """生成高度结构化、题干纯净无干扰、支持 LaTeX 的只读 Markdown 文件，供 AI (如 Claude Code) 检索和备课参考"""
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # 按照 学段 (Compulsory) -> 章节 (Chapter) -> 知识点 (Knowledge) 对题目进行归类
+    # 按照 题型 (Question Type) -> 难度 (Difficulty) 对题目进行归类
     structure = {}
-    
+
     for q in questions:
-        comp = q.category_compulsory or "未分类学段"
-        chap = q.category_chapter or "未分章节"
-        know = q.category_knowledge or "未分知识点"
-        
-        if comp not in structure:
-            structure[comp] = {}
-        if chap not in structure[comp]:
-            structure[comp][chap] = {}
-        if know not in structure[comp][chap]:
-            structure[comp][chap][know] = []
-            
-        structure[comp][chap][know].append(q)
+        qtype = q.question_type or "未分题型"
+        diff = q.difficulty or "未分难度"
+
+        if qtype not in structure:
+            structure[qtype] = {}
+        if diff not in structure[qtype]:
+            structure[qtype][diff] = []
+
+        structure[qtype][diff].append(q)
+
 
     total_count = len(questions)
     
@@ -198,7 +196,7 @@ def generate_markdown_library(questions, filepath: str):
         f.write("# 📚 本地化数学题库导出目录 (AI 备课专属参考)\n\n")
         f.write("> [!IMPORTANT]\n")
         f.write("> **这是由题库系统自动生成的只读导出文件，专门供 Claude Code、Cursor 等 AI 助手在备课时进行题目分析、参考与引用。**\n")
-        f.write("> - **安全与免打扰**：此文件仅包含「题目题干、图片与大纲信息」，**不包含参考答案和详细解析**，防止 AI 备课或生成周测时发生“答案泄露”或输出冗余干扰。\n")
+        f.write("> - **安全与免打扰**：此文件仅包含「题目题干、图片与题型难度信息」，**不包含参考答案和详细解析**，防止 AI 备课或生成周测时发生“答案泄露”或输出冗余干扰。\n")
         f.write("> - **格式完美化**：系统已对原题中的 LaTeX 排版命令（如 `\\item`, `\\begin{itemize}` 等）自动转换为了标准 Markdown 格式，**100% 完美保留了核心数学公式（$...$ 或 $$...$$）**，对 AI 识别无任何编译或阅读干扰。\n")
         f.write("> - 请勿在此文件中直接进行任何手动编辑，您的修改不会被同步回数据库。\n\n")
         
@@ -209,16 +207,18 @@ def generate_markdown_library(questions, filepath: str):
         f.write(f"- 📂 **本地图片存放目录**: `static/uploads/` (在 Git 提交时请包含此目录)\n\n")
         
         # 目录树
-        f.write("## 🗂 目录与知识大纲树\n")
+        f.write("## 🗂 题型与难度目录\n")
         if not structure:
             f.write("*暂无题目数据*\n\n")
         else:
-            for comp in sorted(structure.keys()):
-                f.write(f"- **{comp}**\n")
-                for chap in sorted(structure[comp].keys()):
-                    f.write(f"  - 📂 *{chap}*\n")
-                    for know in sorted(structure[comp][chap].keys()):
-                        f.write(f"    - 📍 {know} ({len(structure[comp][chap][know])} 题)\n")
+            for qtype in structure:
+                type_total = sum(len(qs) for qs in structure[qtype].values())
+                f.write(f"- **{type_display.get(qtype, qtype)}** ({type_total} 题)\n")
+                for diff in structure[qtype]:
+                    f.write(
+                        f"  - {difficulty_display.get(diff, diff)}"
+                        f" ({len(structure[qtype][diff])} 题)\n"
+                    )
             f.write("\n")
             
         f.write("---\n\n")
@@ -232,56 +232,52 @@ def generate_markdown_library(questions, filepath: str):
             # 建立有序的序列号映射（按照 ID 升序，从 1 开始）
             seq_mapping = {q.id: idx for idx, q in enumerate(questions, 1)}
             
-            for comp in sorted(structure.keys()):
-                f.write(f"# 【{comp}】\n\n")
-                for chap in sorted(structure[comp].keys()):
-                    f.write(f"## 📁 {chap}\n\n")
-                    for know in sorted(structure[comp][chap].keys()):
-                        f.write(f"### 📍 知识点：{know}\n\n")
-                        
-                        for q in structure[comp][chap][know]:
-                            q_type_display = type_display.get(q.question_type, q.question_type)
-                            q_diff_display = difficulty_display.get(q.difficulty, q.difficulty)
-                            seq_num = seq_mapping.get(q.id, q.id)
+            for qtype in structure:
+                f.write(f"# 【{type_display.get(qtype, qtype)}】\n\n")
+                for diff in structure[qtype]:
+                    f.write(f"## {difficulty_display.get(diff, diff)}\n\n")
+                    q_type_display = type_display.get(q.question_type, q.question_type)
+                    q_diff_display = difficulty_display.get(q.difficulty, q.difficulty)
+                    seq_num = seq_mapping.get(q.id, q.id)
                             
-                            f.write(f"#### 📌 题目 #{seq_num} (数据库 ID: {q.id})\n")
-                            f.write(f"- **题型**：`{q_type_display}`\n")
-                            f.write(f"- **难度级别**：{q_diff_display}\n")
-                            if q.source:
-                                f.write(f"- **题目来源**：`{q.source}`\n")
-                            if q.association_group_id:
-                                f.write(f"- **关联题目组 ID**：`{q.association_group_id}`\n")
-                            if q.tags:
-                                f.write(f"- **标签**：`{q.tags}`\n")
-                            f.write("\n")
+                    f.write(f"#### 📌 题目 #{seq_num} (数据库 ID: {q.id})\n")
+                    f.write(f"- **题型**：`{q_type_display}`\n")
+                    f.write(f"- **难度级别**：{q_diff_display}\n")
+                    if q.source:
+                        f.write(f"- **题目来源**：`{q.source}`\n")
+                    if q.association_group_id:
+                        f.write(f"- **关联题目组 ID**：`{q.association_group_id}`\n")
+                    if q.tags:
+                        f.write(f"- **标签**：`{q.tags}`\n")
+                    f.write("\n")
                             
-                            # 经过转换与清理的纯净题干
-                            cleaned_content = clean_latex_to_markdown_for_ai(q.content)
-                            f.write("**【题干内容】**\n\n")
-                            f.write(f"{cleaned_content}\n\n")
+                    # 经过转换与清理的纯净题干
+                    cleaned_content = clean_latex_to_markdown_for_ai(q.content)
+                    f.write("**【题干内容】**\n\n")
+                    f.write(f"{cleaned_content}\n\n")
                             
-                            # 插图
-                            img_paths = q.display_image_paths
-                            if img_paths:
-                                f.write("**【题目插图】**\n\n")
-                                for img in img_paths:
-                                    rel_img = f"../{img.lstrip('/')}"
-                                    f.write(f"![题库插图]({rel_img})\n\n")
+                    # 插图
+                    img_paths = q.display_image_paths
+                    if img_paths:
+                        f.write("**【题目插图】**\n\n")
+                        for img in img_paths:
+                            rel_img = f"../{img.lstrip('/')}"
+                            f.write(f"![题库插图]({rel_img})\n\n")
                                     
-                            # TikZ 绘图源代码备份（v5 多图，兼容旧单图字段）
-                            tikz_codes = [
-                                str(asset.get("tikz_code") or "").strip()
-                                for asset in q.content_tikz_assets
-                                if isinstance(asset, dict)
-                                and str(asset.get("tikz_code") or "").strip()
-                            ]
-                            if not tikz_codes and getattr(q, "tikz_code", None):
-                                legacy_tikz = q.tikz_code.strip()
-                                if legacy_tikz:
-                                    tikz_codes = [legacy_tikz]
-                            for index, tikz_code in enumerate(tikz_codes, start=1):
-                                title_suffix = f" {index}" if len(tikz_codes) > 1 else ""
-                                f.write(f"**【TikZ 几何绘图源码{title_suffix}】**\n\n")
-                                f.write(f"```latex\n{tikz_code}\n```\n\n")
+                    # TikZ 绘图源代码备份（v5 多图，兼容旧单图字段）
+                    tikz_codes = [
+                        str(asset.get("tikz_code") or "").strip()
+                        for asset in q.content_tikz_assets
+                        if isinstance(asset, dict)
+                        and str(asset.get("tikz_code") or "").strip()
+                    ]
+                    if not tikz_codes and getattr(q, "tikz_code", None):
+                        legacy_tikz = q.tikz_code.strip()
+                        if legacy_tikz:
+                            tikz_codes = [legacy_tikz]
+                    for index, tikz_code in enumerate(tikz_codes, start=1):
+                        title_suffix = f" {index}" if len(tikz_codes) > 1 else ""
+                        f.write(f"**【TikZ 几何绘图源码{title_suffix}】**\n\n")
+                        f.write(f"```latex\n{tikz_code}\n```\n\n")
                                     
-                            f.write("---\n\n")
+                    f.write("---\n\n")

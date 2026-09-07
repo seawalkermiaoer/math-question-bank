@@ -5,16 +5,13 @@ from PIL import Image
 import pytest
 from sqlalchemy import event
 
-from mathbank.database import Paper, PaperQuestion, Question, QuestionCurriculum
+from mathbank.database import Paper, PaperQuestion, Question
 
 
 def _payload(**overrides):
     payload = {
         "content": "事务测试题",
         "question_type": "single_choice",
-        "category_compulsory": "必修一",
-        "category_chapter": "第一章",
-        "category_knowledge": "集合",
         "difficulty": "medium",
         "source": "测试",
         "answer_markdown": "答案",
@@ -39,23 +36,26 @@ def _write_png(path: Path):
     Image.new("RGB", (4, 4), "white").save(path, format="PNG")
 
 
-def test_question_and_curriculum_are_one_transaction(client, db_session):
-    def reject_curriculum(_session, _flush_context, _instances):
-        if any(isinstance(item, QuestionCurriculum) for item in db_session.new):
-            raise RuntimeError("simulated curriculum failure")
+def test_question_and_fingerprint_are_one_transaction(client, db_session, monkeypatch):
+    import main
 
-    event.listen(db_session, "before_flush", reject_curriculum)
-    try:
-        response = client.post("/api/questions", data=_payload(), headers=_headers())
-    finally:
-        event.remove(db_session, "before_flush", reject_curriculum)
-        db_session.rollback()
+    state = {"fired": False}
 
+    def reject_fingerprint(_db, _question, _fingerprint):
+        state["fired"] = True
+        raise RuntimeError("simulated fingerprint failure")
+
+    monkeypatch.setattr(main, "upsert_question_fingerprint", reject_fingerprint)
+
+    response = client.post("/api/questions", data=_payload(), headers=_headers())
+    db_session.rollback()
+
+    assert state["fired"], "指纹未进入同一事务，注入点已失效"
     assert response.status_code == 400
     assert db_session.query(Question).count() == 0
 
 
-def test_failed_create_moves_promoted_temp_image_back(client, db_session):
+def test_failed_create_moves_promoted_temp_image_back(client, db_session, monkeypatch):
     import main
 
     temp_image = Path(main.TMP_UPLOAD_DIR) / "transaction-promotion.png"
@@ -64,21 +64,22 @@ def test_failed_create_moves_promoted_temp_image_back(client, db_session):
     _write_png(temp_image)
     reference = f"/{main.UPLOAD_DIR_REL}/tmp/{temp_image.name}"
 
-    def reject_curriculum(_session, _flush_context, _instances):
-        if any(isinstance(item, QuestionCurriculum) for item in db_session.new):
-            raise RuntimeError("simulated curriculum failure")
+    state = {"fired": False}
 
-    event.listen(db_session, "before_flush", reject_curriculum)
-    try:
-        response = client.post(
-            "/api/questions",
-            data=_payload(image_paths=json.dumps([reference])),
-            headers=_headers(),
-        )
-    finally:
-        event.remove(db_session, "before_flush", reject_curriculum)
+    def reject_fingerprint(_db, _question, _fingerprint):
+        state["fired"] = True
+        raise RuntimeError("simulated fingerprint failure")
+
+    monkeypatch.setattr(main, "upsert_question_fingerprint", reject_fingerprint)
+
+    response = client.post(
+        "/api/questions",
+        data=_payload(image_paths=json.dumps([reference])),
+        headers=_headers(),
+    )
 
     try:
+        assert state["fired"], "指纹未进入同一事务，注入点已失效"
         assert response.status_code == 400
         assert temp_image.is_file()
         assert not permanent_image.exists()
@@ -522,7 +523,7 @@ def test_question_delete_cascades_paper_link_and_recalculates_total(
     assert db_session.get(Paper, paper_id).total_score == 7
 
 
-def test_metadata_file_and_cache_are_restored_when_db_commit_fails(
+def test_metadata_file_and_cache_are_untouched_when_the_write_fails(
     client, db_session, monkeypatch, tmp_path
 ):
     import main
@@ -531,17 +532,16 @@ def test_metadata_file_and_cache_are_restored_when_db_commit_fails(
     old_metadata = {
         "question_types": [{"value": "single_choice", "label": "单选题"}],
         "difficulties": [{"value": "medium", "label": "中等"}],
-        "curriculum": {"必修一": {"1. 集合与常用逻辑用语": ["集合"]}},
     }
     old_text = json.dumps(old_metadata, ensure_ascii=False, indent=2)
     metadata_path.write_text(old_text, encoding="utf-8")
     monkeypatch.setattr(main, "METADATA_FILE", str(metadata_path))
     monkeypatch.setattr(main, "METADATA_CACHE", old_metadata)
-    monkeypatch.setattr(
-        db_session,
-        "commit",
-        lambda: (_ for _ in ()).throw(RuntimeError("simulated commit failure")),
-    )
+
+    def reject_write(_path, _contents):
+        raise OSError("simulated write failure")
+
+    monkeypatch.setattr(main, "write_private_text_atomic", reject_write)
     new_metadata = {
         **old_metadata,
         "question_types": [{"value": "detailed_answer", "label": "解答题"}],
@@ -567,7 +567,6 @@ def test_metadata_save_succeeds_when_post_commit_export_scheduling_fails(
     old_metadata = {
         "question_types": [{"value": "single_choice", "label": "单选题"}],
         "difficulties": [{"value": "medium", "label": "中等"}],
-        "curriculum": {"必修一": {"第一章": ["集合"]}},
     }
     metadata_path.write_text(
         json.dumps(old_metadata, ensure_ascii=False, indent=2), encoding="utf-8"

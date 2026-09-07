@@ -21,7 +21,6 @@ With just basic LaTeX math formula syntax, MathBank empowers frontline math teac
 - 🎨 **1:1 A4 Simulation Exam Layout**: Provides an intuitive exam paper canvas just like Word, complete with sealing line, title, and notice box. Supports drag-and-drop sorting, question blank space height adjustment, and one-click switching to A3 answer sheet or Gaokao 19-question preset.
 - ⚡ **Second-Level Formula Rendering & Exam-Level Export**: Built-in professional math formula typesetting engine with real-time web preview. Supports one-click export of high-definition PDFs matching National College Entrance Examination (Gaokao) standards and complete LaTeX source packages.
 - 🤖 **AI Intelligent Exam Generation & Solving Assistance**: Built-in Large Language Models (DeepSeek, etc.) automatically select questions and generate exams based on knowledge point breakdown tables and difficulty gradients; supports single-question AI generation of detailed solutions and teaching reflections.
-- 📚 **One-Click Switching Across Major Curriculum Outlines**: Natively preloaded with standard High School curriculum outlines: **PEP A (人教A版)**, **PEP B (人教B版)**, **Jiangsu (苏教版)**, and **Shanghai (沪教版)**. Changing outlines automatically and intelligently maps questions without manual re-organization.
 - 📄 **Multi-Format Exam Smart Parsing & PDF Dual-Strategy Route**: Supports direct drag-and-drop of **LaTeX source (.tex)**, **PDF exams (.pdf)**, or **Word documents (.docx)** for fast intelligent slice parsing. PDF parsing natively offers dual strategies: **[Native Vector Text & Formula Extraction] (Default Recommended)** and **[Full-Page Visual OCR]**. Primary recommendation is native extraction using `PDF Inspector` for sub-second, 0-visual-token loss extraction; if images cause missing formulas, the system smoothly falls back to VLM visual OCR completion; a full-page visual OCR channel is also available as a reliable fallback for unusually formatted exams, ensuring 100% breakdown success rate. Word import structurally converts Office OMML and parses MathType structures from OLE `Equation Native` streams, preserving preview images with manual audit tags for non-high-confidence formulas.
 
 ---
@@ -60,7 +59,7 @@ flowchart LR
 ```mermaid
 flowchart LR
     Doc[Document Parsing] --> Seg[Question Segmentation]
-    Seg --> Classify[Curriculum Tagging & Classification]
+    Seg --> Classify[Question Type & Difficulty Tagging]
     Classify --> Validate[Structured JSON Fault-Tolerant Validation]
     Validate --> Solve[Async Concurrent AI Solving Engine]
 ```
@@ -97,8 +96,10 @@ Both launchers stop only a previously recorded process whose project identity is
    cd math-question-bank
    ```
 
-2. **Install Dependencies** (Python 3.10+ required):
+2. **Create the virtual environment and install dependencies** (Python 3.10+ required; use the project environment with macOS/Homebrew Python):
    ```bash
+   python3 -m venv venv
+   source venv/bin/activate
    python -m pip install -r requirements.txt
    ```
    For development or tests, use `python -m pip install -r requirements-dev.txt`. Versions are locked; run the tests and `python -m pip check` when upgrading them.
@@ -171,7 +172,7 @@ Directly using [DeepSeek Official Open Platform](https://platform.deepseek.com/)
 > A verified full backup is the preferred safeguard before an overlay upgrade. For an additional manual copy, preserve these files/directories:
 > - `*.db` (Local Question Database)
 > - `.env` (API Key Config)
-> - `data_backup/` (Custom Dimensions & Curriculum Outlines)
+> - `data_backup/` (Custom Question Types & Difficulties)
 > - `static/uploads/` (Uploaded Illustrations & Geometry Figures)
 
 ---
@@ -231,7 +232,7 @@ Full backups include a per-file SHA-256 manifest and exclude `.env`, the local t
 │   ├── paper_helper.py         # LaTeX/PDF compilation, layout & LRU cache
 │   ├── sync_helper.py          # JSON sync export & AI library sanitizer
 │   ├── paths.py                # Single source of truth for project paths
-│   ├── curriculums.py          # Preset loader for 4 curriculum outlines
+│   ├── metadata.py             # Default question type and difficulty metadata
 │   ├── prompts.py              # Prompt builder for OCR/solve/parse/TikZ/paper
 │   ├── ai_providers.py         # AI provider & model parameter parsers
 │   ├── ai_http.py              # AI HTTP requests & authentication
@@ -242,7 +243,6 @@ Full backups include a per-file SHA-256 manifest and exclude `.env`, the local t
 │   ├── mtef_helper.py          # MathType OLE/MTEF v5 parser & diagnostics
 │   ├── docx_helper.py          # Word text/table/image extractor & report
 │   ├── pdf_inspector_helper.py # PDF Inspector vector text extraction
-│   └── resources/curriculums/  # Shared JSON outlines for A/B/S/H editions
 ├── scripts/                    # Maintenance, migration, search & release tools
 │   ├── search_questions.py
 │   ├── backup.py

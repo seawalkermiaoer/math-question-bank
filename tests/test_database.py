@@ -5,9 +5,6 @@ def test_question_crud_operations(db_session):
     q = Question(
         content="设集合 $A = \\{1, 2\\}$, $B = \\{2, 3\\}$，则 $A \\cup B = $",
         question_type="single_choice",
-        category_compulsory="必修一",
-        category_chapter="第一章 集合与常用逻辑用语",
-        category_knowledge="集合的并集",
         difficulty="easy",
         source="2024高考真题",
         answer_markdown="$\\{1, 2, 3\\}$",
@@ -27,7 +24,6 @@ def test_question_crud_operations(db_session):
     
     assert q.id is not None
     assert q.question_type == "single_choice"
-    assert q.category_compulsory == "必修一"
     assert q.image_paths == [
         "/static/uploads/test_img.png",
         "/static/uploads/original.png",

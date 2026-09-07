@@ -107,8 +107,6 @@
             
             document.getElementById('editQType').value = 'single_choice';
             document.getElementById('editDifficulty').value = 'easy_error';
-            document.getElementById('editCompulsory').value = '';
-            document.getElementById('editCompulsory').onchange();
             
             document.getElementById('editQType').dispatchEvent(new Event('change'));
             document.getElementById('editDifficulty').dispatchEvent(new Event('change'));
@@ -195,8 +193,6 @@
                 // Reset select lists
                 document.getElementById('editQType').value = 'single_choice';
                 document.getElementById('editDifficulty').value = 'easy_error';
-                document.getElementById('editCompulsory').value = '';
-                document.getElementById('editCompulsory').onchange();
                 
                 document.getElementById('editQType').dispatchEvent(new Event('change'));
                 document.getElementById('editDifficulty').dispatchEvent(new Event('change'));
@@ -254,8 +250,6 @@
             // Reset selects
             document.getElementById('editQType').value = 'single_choice';
             document.getElementById('editDifficulty').value = 'easy_error';
-            document.getElementById('editCompulsory').value = '';
-            document.getElementById('editCompulsory').onchange();
             
             document.getElementById('editQType').dispatchEvent(new Event('change'));
             document.getElementById('editDifficulty').dispatchEvent(new Event('change'));
@@ -606,20 +600,6 @@
                         document.getElementById('editTags').value = fullItem.tags || '';
                     }
                     
-                    const compSelect = document.getElementById('editCompulsory');
-                    const chapSelect = document.getElementById('editChapter');
-                    const knowSelect = document.getElementById('editKnowledge');
-                    
-                    // In case the categories in item are not in tree yet, add them temporarily
-                    // Repopulate with clean categoryTree
-                    populateCategoryDropdowns();
-                    
-                    compSelect.value = fullItem.category_compulsory || '';
-                    compSelect.onchange();
-                    chapSelect.value = fullItem.category_chapter || '';
-                    chapSelect.onchange();
-                    knowSelect.value = fullItem.category_knowledge || '';
-                    
                     // Dispatch input previews or update synchronously
                     if (typeof window.updateContentPreview === 'function') {
                         window.updateContentPreview();
@@ -679,7 +659,7 @@
         };
 
         // Save/Update Question in SQLite (returns Promise)
-        function saveQuestion(skipCheck = false) {
+        function saveQuestion() {
             if (questionDetailLoading) {
                 showToast('题目详情仍在加载，请稍候再保存', 'info');
                 return Promise.resolve(false);
@@ -692,9 +672,6 @@
                 const editorSession = EditorState.snapshot();
                 const content = document.getElementById('editContent').value;
                 const qtype = document.getElementById('editQType').value;
-                const compulsory = document.getElementById('editCompulsory').value;
-                const chapter = document.getElementById('editChapter').value;
-                const knowledge = document.getElementById('editKnowledge').value;
                 const difficulty = document.getElementById('editDifficulty').value;
                 const source = document.getElementById('editSource').value;
                 const answerMarkdown = document.getElementById('editAnswerMarkdown').value;
@@ -716,45 +693,6 @@
                     return false;
                 }
                 
-                // Check if Compulsory or Chapter classifications are missing
-                if (!skipCheck && (!compulsory || !chapter)) {
-                    const choice = await showMissingCompulsoryModal();
-                    if (choice === 'manual') {
-                        if (!compulsory) {
-                            const compSelect = document.getElementById('editCompulsory');
-                            if (compSelect) {
-                                compSelect.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                // Add premium temporary focus highlight (using brand color ring)
-                                compSelect.classList.remove('border-slate-200');
-                                compSelect.classList.add('ring-2', 'ring-brand-500', 'border-brand-500');
-                                setTimeout(() => {
-                                    compSelect.classList.remove('ring-2', 'ring-brand-500', 'border-brand-500');
-                                    compSelect.classList.add('border-slate-200');
-                                }, 2500);
-                                compSelect.focus();
-                            }
-                        } else if (!chapter) {
-                            const chapSelect = document.getElementById('editChapter');
-                            if (chapSelect) {
-                                chapSelect.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                // Add premium temporary focus highlight (using brand color ring)
-                                chapSelect.classList.remove('border-slate-200');
-                                chapSelect.classList.add('ring-2', 'ring-brand-500', 'border-brand-500');
-                                setTimeout(() => {
-                                    chapSelect.classList.remove('ring-2', 'ring-brand-500', 'border-brand-500');
-                                    chapSelect.classList.add('border-slate-200');
-                                }, 2500);
-                                chapSelect.focus();
-                            }
-                        }
-                    } else if (choice === 'ai') {
-                        // Automatically open AI classify modal and trigger AI analysis
-                        openClassifyModal();
-                        runAIClassify();
-                    }
-                    return false;
-                }
-
                 let duplicateDecision = {
                     allowed: true,
                     duplicateOverride: '',
@@ -777,9 +715,6 @@
                     question_type: qtype,
                     difficulty: difficulty,
                     source: source,
-                    category_compulsory: compulsory,
-                    category_chapter: chapter,
-                    category_knowledge: knowledge,
                     related_question_id: relatedQuestionId,
                     image_paths: JSON.stringify(Array.from(uploadedImages)),
                     tikz_code: tikzCode,
@@ -797,9 +732,6 @@
                 const formData = new FormData();
                 formData.append('content', content);
                 formData.append('question_type', qtype);
-                formData.append('category_compulsory', compulsory);
-                formData.append('category_chapter', chapter);
-                formData.append('category_knowledge', knowledge);
                 formData.append('difficulty', difficulty);
                 formData.append('source', source);
                 formData.append('answer_markdown', answerMarkdown);
@@ -915,7 +847,7 @@
 
                         // Reload list, dropdown, and autocomplete selectors
                         loadQuestions();
-                        loadCategories();
+                        loadMetadata();
                         refreshRelatedDropdown(relatedQuestionId);
 
                         if (!editorSession.questionId && editorSessionStillCurrent) {
@@ -951,192 +883,6 @@
             return saveQuestionInFlight;
         }
 
-        // AI classification modal handlers
-        let temporaryClassifyData = null;
-        let temporaryClassifyQuestionType = null;
-
-        function setClassifyApplyEnabled(enabled) {
-            const applyBtn = document.getElementById('classifyApplyButton');
-            if (!applyBtn) return;
-            applyBtn.disabled = !enabled;
-            applyBtn.setAttribute('aria-disabled', enabled ? 'false' : 'true');
-        }
-
-        function resetClassifiedChoiceType() {
-            temporaryClassifyQuestionType = null;
-            ['classifySingleChoiceBtn', 'classifyMultiChoiceBtn'].forEach(id => {
-                const button = document.getElementById(id);
-                if (!button) return;
-                button.setAttribute('aria-checked', 'false');
-            });
-        }
-
-        function selectClassifiedChoiceType(questionType) {
-            if (questionType !== 'single_choice' && questionType !== 'multi_choice') return;
-            temporaryClassifyQuestionType = questionType;
-            const selectedId = questionType === 'single_choice'
-                ? 'classifySingleChoiceBtn'
-                : 'classifyMultiChoiceBtn';
-            ['classifySingleChoiceBtn', 'classifyMultiChoiceBtn'].forEach(id => {
-                const button = document.getElementById(id);
-                if (!button) return;
-                const selected = id === selectedId;
-                button.setAttribute('aria-checked', selected ? 'true' : 'false');
-            });
-            setClassifyApplyEnabled(true);
-        }
-
-        function openClassifyModal() {
-            const modal = document.getElementById('aiClassifyModal');
-            modal.classList.remove('hidden');
-            window.MathBankModal.open(modal, { onEscape: closeClassifyModal });
-            
-            // Reset modal states
-            document.getElementById('classifyLoading').classList.add('hidden');
-            document.getElementById('classifyResult').classList.add('hidden');
-            document.getElementById('classifyAIButton').classList.remove('hidden');
-            document.getElementById('classifyApplyButton').classList.add('hidden');
-            document.getElementById('choiceTypeConfirm').classList.add('hidden');
-            document.getElementById('unknownQuestionFormNotice').classList.add('hidden');
-            temporaryClassifyData = null;
-            resetClassifiedChoiceType();
-            setClassifyApplyEnabled(true);
-            
-            setTimeout(() => {
-                modal.classList.remove('opacity-0');
-                modal.querySelector('div').classList.remove('scale-95');
-                modal.querySelector('div').classList.add('scale-100');
-            }, 50);
-        }
-
-        function closeClassifyModal() {
-            const modal = document.getElementById('aiClassifyModal');
-            window.MathBankModal.close(modal);
-            modal.classList.add('opacity-0');
-            modal.querySelector('div').classList.remove('scale-100');
-            modal.querySelector('div').classList.add('scale-95');
-            setTimeout(() => {
-                modal.classList.add('hidden');
-            }, 300);
-        }
-
-        function runAIClassify() {
-            const content = document.getElementById('editContent').value;
-            const loading = document.getElementById('classifyLoading');
-            const resultBox = document.getElementById('classifyResult');
-            const aiBtn = document.getElementById('classifyAIButton');
-            const applyBtn = document.getElementById('classifyApplyButton');
-            
-            loading.classList.remove('hidden');
-            aiBtn.classList.add('hidden');
-            resultBox.classList.add('hidden');
-            
-            const formData = new FormData();
-            formData.append('content', content);
-            
-            fetch('/api/ai/classify', {
-                method: 'POST',
-                body: formData
-            })
-            .then(r => r.json())
-            .then(data => {
-                loading.classList.add('hidden');
-                
-                if (data.status === 'success') {
-                    temporaryClassifyData = data;
-                    document.getElementById('recCompulsory').textContent = data.compulsory;
-                    document.getElementById('recChapter').textContent = data.chapter;
-                    const formLabels = {
-                        'choice': '选择题',
-                        'fill_in_blank': '填空题',
-                        'detailed_answer': '解答题',
-                        'unknown': '待手动确认'
-                    };
-                    const questionForm = formLabels[data.question_form] ? data.question_form : 'unknown';
-                    document.getElementById('recQuestionForm').textContent = formLabels[questionForm];
-                    document.getElementById('recQuestionFormSource').textContent = data.question_form_source === 'structure'
-                        ? '结构规则识别'
-                        : 'AI 建议';
-
-                    const choiceConfirm = document.getElementById('choiceTypeConfirm');
-                    const unknownNotice = document.getElementById('unknownQuestionFormNotice');
-                    choiceConfirm.classList.toggle('hidden', questionForm !== 'choice');
-                    unknownNotice.classList.toggle('hidden', questionForm !== 'unknown');
-                    resetClassifiedChoiceType();
-
-                    if (questionForm === 'fill_in_blank') {
-                        temporaryClassifyQuestionType = 'fill_in_blank';
-                        setClassifyApplyEnabled(true);
-                    } else if (questionForm === 'detailed_answer') {
-                        temporaryClassifyQuestionType = 'detailed_answer';
-                        setClassifyApplyEnabled(true);
-                    } else if (questionForm === 'choice') {
-                        setClassifyApplyEnabled(false);
-                    } else {
-                        setClassifyApplyEnabled(true);
-                    }
-                    
-                    resultBox.classList.remove('hidden');
-                    applyBtn.classList.remove('hidden');
-                } else {
-                    showToast(data.message || 'AI 智能分类分析失败！', 'error');
-                    aiBtn.classList.remove('hidden');
-                }
-            })
-            .catch(err => {
-                loading.classList.add('hidden');
-                aiBtn.classList.remove('hidden');
-                showToast('AI 分类出错: ' + err, 'error');
-            });
-        }
-
-        function applyClassifyRecommendation() {
-            if (!temporaryClassifyData) return;
-            if (temporaryClassifyData.question_form === 'choice' && !temporaryClassifyQuestionType) {
-                showToast('请先确认此题是单选题还是多选题！', 'error');
-                return;
-            }
-            
-            const compSelect = document.getElementById('editCompulsory');
-            const chapSelect = document.getElementById('editChapter');
-            const knowSelect = document.getElementById('editKnowledge');
-            const qtypeSelect = document.getElementById('editQType');
-            
-            const comp = temporaryClassifyData.compulsory;
-            const chap = temporaryClassifyData.chapter;
-            
-            // Ensure nodes exist in local dictionary structure
-            if (!categoryTree[comp]) {
-                categoryTree[comp] = {};
-            }
-            if (!categoryTree[comp][chap]) {
-                categoryTree[comp][chap] = [];
-            }
-            
-            populateCategoryDropdowns();
-            
-            compSelect.value = comp;
-            compSelect.onchange();
-            chapSelect.value = chap;
-            chapSelect.onchange();
-            knowSelect.value = chap; // Default empty third level (小节) to chapter name
-
-            if (temporaryClassifyQuestionType && qtypeSelect) {
-                qtypeSelect.value = temporaryClassifyQuestionType;
-                qtypeSelect.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-            
-            closeClassifyModal();
-            showToast('教材章节及题型已确认！');
-            
-            // Save question now with skipCheck = true
-            setTimeout(() => {
-                saveQuestion(true);
-            }, 250);
-        }
-
-        window.selectClassifiedChoiceType = selectClassifiedChoiceType;
-
         // Delete Question
         function deleteQuestion(id) {
             if (blockEditorSessionChangeWhileSaving()) {
@@ -1154,7 +900,7 @@
                             startNewQuestion();
                         } else {
                             loadQuestions();
-                            loadCategories();
+                            loadMetadata();
                         }
                         refreshRelatedDropdown();
                     } else {
@@ -3592,19 +3338,6 @@
                         </div>
                     </div>
 
-                    <!-- Curriculum linkage section -->
-                    <div class="grid grid-cols-3 gap-2 border-b pb-3 shrink-0">
-                        <select class="card-compulsory glass-select px-2 py-1.5 rounded-lg text-[10px] font-semibold">
-                            <option value="">所有学段</option>
-                        </select>
-                        <select class="card-chapter glass-select px-2 py-1.5 rounded-lg text-[10px] font-semibold">
-                            <option value="">所有章节</option>
-                        </select>
-                        <select class="card-knowledge glass-select px-2 py-1.5 rounded-lg text-[10px] font-semibold">
-                            <option value="">所有小节</option>
-                        </select>
-                    </div>
-
                     <!-- Body Content Split -->
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 flex-1">
                         <!-- Left Side: Inputs -->
@@ -3659,7 +3392,6 @@
                 card.querySelector('.card-answer-textarea').value = String(q.answer_markdown || '');
 
                 container.appendChild(card);
-                setupCardCategoryLinkage(card, q);
 
                 // Populate image badges
                 const badgesContainer = document.getElementById(`card-images-badges-${index}`);
@@ -3701,72 +3433,6 @@
             });
 
             if (typeof updateSelectedCount === 'function') updateSelectedCount();
-        }
-
-        function setupCardCategoryLinkage(card, q) {
-            const compSelect = card.querySelector('.card-compulsory');
-            const chapSelect = card.querySelector('.card-chapter');
-            const knowSelect = card.querySelector('.card-knowledge');
-
-            compSelect.innerHTML = '<option value="">-- 选择学段 --</option>';
-            Object.keys(categoryTree).forEach(c => {
-                const opt = document.createElement('option');
-                opt.value = c;
-                opt.textContent = c;
-                if (c === q.category_compulsory) opt.selected = true;
-                compSelect.appendChild(opt);
-            });
-
-            const updateChapters = () => {
-                const comp = compSelect.value;
-                chapSelect.innerHTML = '<option value="">-- 选择章节 --</option>';
-                knowSelect.innerHTML = '<option value="">-- 先选择章节 --</option>';
-                knowSelect.disabled = true;
-
-                if (comp && categoryTree[comp]) {
-                    chapSelect.disabled = false;
-                    Object.keys(categoryTree[comp]).forEach(ch => {
-                        const opt = document.createElement('option');
-                        opt.value = ch;
-                        opt.textContent = ch;
-                        if (ch === q.category_chapter) opt.selected = true;
-                        chapSelect.appendChild(opt);
-                    });
-                } else {
-                    chapSelect.disabled = true;
-                }
-            };
-
-            const updateKnowledge = () => {
-                const comp = compSelect.value;
-                const chap = chapSelect.value;
-                knowSelect.innerHTML = '<option value="">-- 选择小节 (默认整章) --</option>';
-
-                if (comp && chap && categoryTree[comp][chap]) {
-                    knowSelect.disabled = false;
-                    categoryTree[comp][chap].forEach(k => {
-                        const opt = document.createElement('option');
-                        opt.value = k;
-                        opt.textContent = k;
-                        if (k === q.category_knowledge) opt.selected = true;
-                        knowSelect.appendChild(opt);
-                    });
-                } else {
-                    knowSelect.disabled = true;
-                }
-            };
-
-            compSelect.addEventListener('change', () => {
-                updateChapters();
-                updateKnowledge();
-            });
-
-            chapSelect.addEventListener('change', () => {
-                updateKnowledge();
-            });
-
-            updateChapters();
-            updateKnowledge();
         }
 
         function renderParsedCardPreview(card, contentText, answerText) {
@@ -3854,8 +3520,6 @@
             if (!card || !q) return false;
             const content = card.querySelector('.card-content-textarea')?.value.trim() || '';
             const questionType = card.querySelector('.card-qtype')?.value || '';
-            const compulsory = card.querySelector('.card-compulsory')?.value || '';
-            const chapter = card.querySelector('.card-chapter')?.value || '';
             let message = '';
             let target = null;
             if (!content) {
@@ -3864,11 +3528,6 @@
             } else if (!questionType) {
                 message = `请确认第 ${index + 1} 题的题型！`;
                 target = card.querySelector('.card-qtype');
-            } else if (!compulsory || !chapter) {
-                message = `请选择第 ${index + 1} 题的学段与所属章节！`;
-                target = !compulsory
-                    ? card.querySelector('.card-compulsory')
-                    : card.querySelector('.card-chapter');
             }
             if (!message) return true;
             if (options.notify !== false) showToast(message, 'warning');
@@ -3959,30 +3618,10 @@
                 const question_type = card.querySelector('.card-qtype').value;
                 const difficulty = card.querySelector('.card-difficulty').value;
                 const source = card.querySelector('.card-source').value.trim();
-                const category_compulsory = card.querySelector('.card-compulsory').value;
-                const category_chapter = card.querySelector('.card-chapter').value;
-                const category_knowledge = card.querySelector('.card-knowledge').value;
 
                 if (!content) {
                     showToast(`第 ${index + 1} 题的题干内容不能为空！`, 'warning');
                     throw new Error('Content empty');
-                }
-                if (!category_compulsory || !category_chapter) {
-                    showToast(`请选择第 ${index + 1} 题的学段与所属章节！`, 'warning');
-                    const compSelect = card.querySelector('.card-compulsory');
-                    const chapSelect = card.querySelector('.card-chapter');
-                    const targetSelect = !category_compulsory ? compSelect : chapSelect;
-                    if (targetSelect) {
-                        targetSelect.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        targetSelect.classList.remove('border-slate-200');
-                        targetSelect.classList.add('ring-2', 'ring-red-400', 'border-red-400');
-                        setTimeout(() => {
-                            targetSelect.classList.remove('ring-2', 'ring-red-400', 'border-red-400');
-                            targetSelect.classList.add('border-slate-200');
-                        }, 2500);
-                        targetSelect.focus();
-                    }
-                    throw new Error('Curriculum empty');
                 }
 
                 if (saveBtn) {
@@ -3992,9 +3631,6 @@
                 const formData = new FormData();
                 formData.append('content', content);
                 formData.append('question_type', question_type);
-                formData.append('category_compulsory', category_compulsory);
-                formData.append('category_chapter', category_chapter);
-                formData.append('category_knowledge', category_knowledge);
                 formData.append('difficulty', difficulty);
                 formData.append('source', source);
                 formData.append('answer_markdown', answer_markdown);
@@ -4072,13 +3708,13 @@
                     }
                 }
                 if (options.suppressRefresh !== true) {
-                    loadCategories();
+                    loadMetadata();
                     loadQuestions();
                 }
                 return true;
             })().catch(err => {
                 if (isParsedQuestionSaveContextCurrent(saveGeneration, index, q)) {
-                    if (err.message !== 'Content empty' && err.message !== 'Curriculum empty') {
+                    if (err.message !== 'Content empty') {
                         showToast(`第 ${index + 1} 题保存出错: ${err.message}`, 'error');
                     }
                 }
@@ -4351,7 +3987,7 @@
                     ? `；其中 ${fingerprintWarningCount} 道题的查重指纹待后台补建`
                     : '';
                 if (successCount > 0) {
-                    loadCategories();
+                    loadMetadata();
                     loadQuestions();
                 }
                 updateSelectedCount();
@@ -4675,7 +4311,7 @@
             }
 
             // Load Cascade Category Tree
-            loadCategories();
+            loadMetadata();
             
             // Load saved questions list
             loadQuestions();

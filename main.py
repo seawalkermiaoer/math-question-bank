@@ -31,7 +31,6 @@ from dotenv import load_dotenv
 
 from mathbank.database import (
     Question,
-    QuestionCurriculum,
     QuestionFingerprint as StoredQuestionFingerprint,
     Paper,
     PaperQuestion,
@@ -96,26 +95,21 @@ from mathbank.ai_providers import (
     resolve_ocr_provider,
     resolve_text_provider,
 )
-from mathbank.curriculums import (
+from mathbank.metadata import (
+    METADATA_FIELDS,
     build_default_metadata,
-    get_curriculum_preset,
-    load_curriculum,
+    normalize_metadata,
 )
 from mathbank.prompts import (
     COMMON_OCR_PROMPT,
     ILLUSTRATION_BOX_PROMPT,
     build_ai_solve_prompts,
-    build_classification_system_prompt,
     build_import_parse_system_prompt,
     build_latex_error_explanation_prompts,
     build_paper_selection_prompts,
     build_pdf_parse_system_prompt,
     build_tikz_correction_prompt,
     build_tikz_draw_prompt,
-)
-from mathbank.question_types import (
-    detect_structured_question_form,
-    normalize_ai_question_form,
 )
 import shutil
 from mathbank.pdf_inspector_helper import (
@@ -288,68 +282,6 @@ def print_optional_tool_diagnostics():
         f"pymupdf={pymupdf_status}",
         flush=True,
     )
-
-def heal_database_curriculum_names():
-    from mathbank.database import SessionLocal
-    db = SessionLocal()
-    try:
-        mappings = {
-            "选择性必修一": "选修一",
-            "选择性必修二": "选修二",
-            "选择性必修三": "选修三",
-            "必修第一册": "必修一",
-            "必修第二册": "必修二",
-            "必修第三册": "必修三",
-            "必修第四册": "必修四",
-        }
-        updated_questions = 0
-        for old, new in mappings.items():
-            res = db.query(Question).filter(Question.category_compulsory == old).update(
-                {Question.category_compulsory: new}, synchronize_session=False
-            )
-            updated_questions += res
-            
-        updated_mappings = 0
-        for old, new in mappings.items():
-            res = db.query(QuestionCurriculum).filter(QuestionCurriculum.compulsory == old).update(
-                {QuestionCurriculum.compulsory: new}, synchronize_session=False
-            )
-            updated_mappings += res
-
-        # 清理在主表 questions 及镜像表 question_curriculums 中残留的不属于各自大纲小节列表的旧章名/错位知识点
-        curr = get_current_curriculum()
-        healed_know_count = 0
-        all_qs = db.query(Question).all()
-        for q in all_qs:
-            comp = q.category_compulsory
-            chap = q.category_chapter
-            know = q.category_knowledge
-            if know:
-                valid_knows = curr.get(comp, {}).get(chap, [])
-                if know not in valid_knows:
-                    q.category_knowledge = ""
-                    healed_know_count += 1
-
-        all_qcs = db.query(QuestionCurriculum).all()
-        for qc in all_qcs:
-            if qc.knowledge:
-                try:
-                    c_tree = load_curriculum(qc.version_code)
-                except ValueError:
-                    c_tree = curr
-                valid_knows = c_tree.get(qc.compulsory, {}).get(qc.chapter, [])
-                if qc.knowledge not in valid_knows:
-                    qc.knowledge = ""
-                    healed_know_count += 1
-            
-        if updated_questions > 0 or updated_mappings > 0 or healed_know_count > 0:
-            db.commit()
-            print(f"[Self-Healing DB] Migrated {updated_questions} questions, {updated_mappings} mappings, and cleaned {healed_know_count} mismatched knowledge values.")
-    except Exception as e:
-        db.rollback()
-        print(f"[Self-Healing DB Error] Failed to run database book names migration: {e}")
-    finally:
-        db.close()
 
 UPLOAD_DIR_REL = "static/test_uploads" if IS_TESTING else "static/uploads"
 UPLOAD_DIR = str(TEST_UPLOADS_DIR if IS_TESTING else UPLOADS_DIR)
@@ -559,7 +491,6 @@ def start_startup_cleanup():
         print(f"[Backup Error] 每日完整备份失败: {type(exc).__name__}: {exc}")
         print_optional_tool_diagnostics()
         return
-    heal_database_curriculum_names()
     clean_orphaned_images()
     recalibrate_usage_counts()
     try:
@@ -1418,7 +1349,6 @@ def get_settings():
     ali_model = os.getenv("ALI_BAILIAN_OCR_MODEL", "qwen3.7-flash")
     prefer_solve_model = os.getenv("PREFER_SOLVE_MODEL", "deepseek-v4-pro")
     prefer_parse_model = os.getenv("PREFER_PARSE_MODEL", "deepseek-v4-flash")
-    prefer_classify_model = os.getenv("PREFER_CLASSIFY_MODEL") or os.getenv("DEEPSEEK_CLASSIFY_MODEL", "deepseek-v4-flash")
     prefer_draw_model = os.getenv("PREFER_DRAW_MODEL", "Qwen/Qwen3-VL-32B-Instruct")
     
     masked_ds = ""
@@ -1456,7 +1386,6 @@ def get_settings():
         "ali_bailian_model": ali_model,
         "prefer_solve_model": prefer_solve_model,
         "prefer_parse_model": prefer_parse_model,
-        "prefer_classify_model": prefer_classify_model,
         "prefer_draw_model": prefer_draw_model
     }
 
@@ -1476,7 +1405,6 @@ def save_settings(
     ali_bailian_model: str = Form("qwen3.7-flash"),
     prefer_solve_model: str = Form("deepseek-v4-pro"),
     prefer_parse_model: str = Form("deepseek-v4-flash"),
-    prefer_classify_model: str = Form("deepseek-v4-flash"),
     prefer_draw_model: str = Form("Qwen/Qwen3-VL-32B-Instruct")
 ):
     try:
@@ -1495,7 +1423,6 @@ def save_settings(
             "ali_bailian_model": ali_bailian_model,
             "prefer_solve_model": prefer_solve_model,
             "prefer_parse_model": prefer_parse_model,
-            "prefer_classify_model": prefer_classify_model,
             "prefer_draw_model": prefer_draw_model,
         }
         if any("\r" in value or "\n" in value for value in settings_values.values()):
@@ -1534,7 +1461,6 @@ def save_settings(
             "ALI_BAILIAN_OCR_MODEL": False,
             "PREFER_SOLVE_MODEL": False,
             "PREFER_PARSE_MODEL": False,
-            "PREFER_CLASSIFY_MODEL": False,
             "PREFER_DRAW_MODEL": False
         }
         new_lines = []
@@ -1587,9 +1513,6 @@ def save_settings(
             elif line_strip.startswith("PREFER_PARSE_MODEL="):
                 new_lines.append(f"PREFER_PARSE_MODEL={prefer_parse_model}\n")
                 keys_replaced["PREFER_PARSE_MODEL"] = True
-            elif line_strip.startswith("PREFER_CLASSIFY_MODEL=") or line_strip.startswith("DEEPSEEK_CLASSIFY_MODEL="):
-                new_lines.append(f"PREFER_CLASSIFY_MODEL={prefer_classify_model}\n")
-                keys_replaced["PREFER_CLASSIFY_MODEL"] = True
             elif line_strip.startswith("PREFER_DRAW_MODEL="):
                 new_lines.append(f"PREFER_DRAW_MODEL={prefer_draw_model}\n")
                 keys_replaced["PREFER_DRAW_MODEL"] = True
@@ -1625,8 +1548,6 @@ def save_settings(
             new_lines.append(f"PREFER_SOLVE_MODEL={prefer_solve_model}\n")
         if not keys_replaced["PREFER_PARSE_MODEL"]:
             new_lines.append(f"PREFER_PARSE_MODEL={prefer_parse_model}\n")
-        if not keys_replaced["PREFER_CLASSIFY_MODEL"]:
-            new_lines.append(f"PREFER_CLASSIFY_MODEL={prefer_classify_model}\n")
         if not keys_replaced["PREFER_DRAW_MODEL"]:
             new_lines.append(f"PREFER_DRAW_MODEL={prefer_draw_model}\n")
             
@@ -1651,7 +1572,6 @@ def save_settings(
         os.environ["ALI_BAILIAN_OCR_MODEL"] = ali_bailian_model
         os.environ["PREFER_SOLVE_MODEL"] = prefer_solve_model
         os.environ["PREFER_PARSE_MODEL"] = prefer_parse_model
-        os.environ["PREFER_CLASSIFY_MODEL"] = prefer_classify_model
         os.environ["PREFER_DRAW_MODEL"] = prefer_draw_model
         
         return {"status": "success", "message": "API 与首选大模型配置已成功保存并即时生效！"}
@@ -2177,12 +2097,6 @@ def draw_tikz_from_image_endpoint(
 def list_questions(
     q: str = None,
     search: str = None,
-    compulsory: str = None,
-    category_compulsory: str = None,
-    chapter: str = None,
-    category_chapter: str = None,
-    knowledge: str = None,
-    category_knowledge: str = None,
     qtype: str = None,
     question_type: str = None,
     difficulty: str = None,
@@ -2193,9 +2107,6 @@ def list_questions(
     db: Session = Depends(get_db)
 ):
     search_q = q or search
-    comp_val = compulsory or category_compulsory
-    chap_val = chapter or category_chapter
-    know_val = knowledge or category_knowledge
     type_val = qtype or question_type
 
     query = db.query(Question)
@@ -2237,12 +2148,6 @@ def list_questions(
                 (Question.review.like(f"%{search_q}%")) |
                 (Question.tags.like(f"%{search_q}%"))
             )
-    if comp_val:
-        query = query.filter(Question.category_compulsory == comp_val)
-    if chap_val:
-        query = query.filter(Question.category_chapter == chap_val)
-    if know_val:
-        query = query.filter(Question.category_knowledge == know_val)
     if type_val:
         query = query.filter(Question.question_type == type_val)
     if difficulty:
@@ -2751,9 +2656,6 @@ def create_question(
     background_tasks: BackgroundTasks,
     content: str = Form(...),
     question_type: str = Form(...),
-    category_compulsory: str = Form(""),
-    category_chapter: str = Form(""),
-    category_knowledge: str = Form(""),
     difficulty: str = Form(...),
     source: str = Form(""),
     answer_markdown: str = Form(""),
@@ -2804,17 +2706,9 @@ def create_question(
             tikz_code,
             promotion_log=asset_promotions,
         )
-        
-        # 1. Fallback if third level is empty, default to chapter
-        if not category_knowledge and category_chapter:
-            category_knowledge = category_chapter
-            
         db_question = Question(
             content=content,
             question_type=question_type,
-            category_compulsory=category_compulsory,
-            category_chapter=category_chapter,
-            category_knowledge=category_knowledge,
             difficulty=difficulty,
             source=source,
             answer_markdown=answer_markdown,
@@ -2892,16 +2786,6 @@ def create_question(
         if question_fingerprint is not None:
             upsert_question_fingerprint(db, db_question, question_fingerprint)
 
-        # Save the question and its active curriculum mirror atomically.
-        active_version = get_active_version_code()
-        curriculum_map = QuestionCurriculum(
-            question_id=db_question.id,
-            version_code=active_version,
-            compulsory=category_compulsory,
-            chapter=category_chapter,
-            knowledge=category_knowledge
-        )
-        db.add(curriculum_map)
         committed_question_id = db_question.id
         db.commit()
     except Exception as e:
@@ -2934,9 +2818,6 @@ def update_question(
     background_tasks: BackgroundTasks,
     content: str = Form(...),
     question_type: str = Form(...),
-    category_compulsory: str = Form(""),
-    category_chapter: str = Form(""),
-    category_knowledge: str = Form(""),
     difficulty: str = Form(...),
     source: str = Form(""),
     answer_markdown: str = Form(""),
@@ -2992,16 +2873,8 @@ def update_question(
             tikz_code,
             promotion_log=asset_promotions,
         )
-        
-        # 1. Fallback if third level is empty, default to chapter
-        if not category_knowledge and category_chapter:
-            category_knowledge = category_chapter
-            
         db_question.content = content
         db_question.question_type = question_type
-        db_question.category_compulsory = category_compulsory
-        db_question.category_chapter = category_chapter
-        db_question.category_knowledge = category_knowledge
         db_question.difficulty = difficulty
         db_question.source = source
         db_question.answer_markdown = answer_markdown
@@ -3040,22 +2913,6 @@ def update_question(
                             {Question.association_group_id: g2}, synchronize_session=False
                         )
                         db_question.association_group_id = g2
-        
-        # Update or create active QuestionCurriculum mapping
-        active_version = get_active_version_code()
-        curriculum_map = db.query(QuestionCurriculum).filter(
-            QuestionCurriculum.question_id == db_question.id,
-            QuestionCurriculum.version_code == active_version
-        ).first()
-        if not curriculum_map:
-            curriculum_map = QuestionCurriculum(
-                question_id=db_question.id,
-                version_code=active_version
-            )
-            db.add(curriculum_map)
-        curriculum_map.compulsory = category_compulsory
-        curriculum_map.chapter = category_chapter
-        curriculum_map.knowledge = category_knowledge
 
         db.flush()
         try:
@@ -3319,73 +3176,43 @@ def delete_question(
 
     return {"status": "success", "message": "题目删除成功"}
 
-# ----------------- Category Hierarchy Autocomplete API -----------------
-
-# Backward-compatible names; authoritative data lives in JSON resources.
-RENJIAO_A_CURRICULUM = load_curriculum("A")
-RENJIAO_B_CURRICULUM = load_curriculum("B")
-SUJIAO_CURRICULUM = load_curriculum("S")
-HUJIAO_CURRICULUM = load_curriculum("H")
+# ----------------- Editable Metadata (Question Types & Difficulties) -----------------
 
 METADATA_FILE = str(DATA_BACKUP_DIR / ("custom_metadata_test.json" if IS_TESTING else "custom_metadata.json"))
 METADATA_CACHE = {}
 
-def get_current_curriculum():
-    return METADATA_CACHE.get("curriculum", RENJIAO_A_CURRICULUM)
-
 def load_or_init_metadata():
     global METADATA_CACHE
-    default_metadata = build_default_metadata("A")
-    
+    default_metadata = build_default_metadata()
+
     # Ensure backup directory exists
     os.makedirs(os.path.dirname(METADATA_FILE), exist_ok=True)
-    
+
     if os.path.exists(METADATA_FILE):
         try:
             with open(METADATA_FILE, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
                 # Verify schema
-                if isinstance(loaded, dict) and "question_types" in loaded and "difficulties" in loaded and "curriculum" in loaded:
-                    # Self-heal metadata file (e.g. add 常规题, update simplified book names)
-                    modified = False
+                if isinstance(loaded, dict) and "question_types" in loaded and "difficulties" in loaded:
+                    # Self-heal metadata file (e.g. add 常规题)
                     has_normal = any(d.get("value") == "normal" for d in loaded.get("difficulties", []))
                     if not has_normal:
                         loaded["difficulties"].insert(1, {"value": "normal", "label": "常规题", "color": "text-blue-600 bg-blue-50 border-blue-200"})
-                        modified = True
-                        
-                    curriculum = loaded.get("curriculum", {})
-                    mappings = {
-                        "选择性必修一": "选修一",
-                        "选择性必修二": "选修二",
-                        "选择性必修三": "选修三",
-                        "必修第一册": "必修一",
-                        "必修第二册": "必修二",
-                        "必修第三册": "必修三",
-                        "必修第四册": "必修四",
-                    }
-                    new_curriculum = {}
-                    for comp, chapters in curriculum.items():
-                        mapped_comp = mappings.get(comp, comp)
-                        if mapped_comp != comp:
-                            modified = True
-                        new_curriculum[mapped_comp] = chapters
-                    if modified:
-                        loaded["curriculum"] = new_curriculum
                         try:
                             write_private_text_atomic(
                                 METADATA_FILE,
                                 json.dumps(loaded, ensure_ascii=False, indent=2),
                             )
-                            print(f"[Metadata Self-Heal] Upgraded {METADATA_FILE} with simplified book names and normal difficulty.")
+                            print(f"[Metadata Self-Heal] Upgraded {METADATA_FILE} with the normal difficulty.")
                         except Exception as e:
                             print(f"[Metadata Self-Heal Error] Failed to write updated metadata: {e}")
-                    
-                    METADATA_CACHE = loaded
+
+                    METADATA_CACHE = normalize_metadata(loaded)
                     print(f"[Metadata] Loaded custom metadata from {METADATA_FILE}")
                     return
         except Exception as e:
             print(f"[Metadata Warning] Error loading {METADATA_FILE}: {e}. Overwriting with default.")
-            
+
     # Self-heal / initialize
     try:
         write_private_text_atomic(
@@ -3395,264 +3222,45 @@ def load_or_init_metadata():
         print(f"[Metadata] Initialized default metadata at {METADATA_FILE}")
     except Exception as e:
         print(f"[Metadata Error] Could not write default metadata: {e}")
-        
+
     METADATA_CACHE = default_metadata
 
 # Load metadata on startup
 load_or_init_metadata()
 
-def get_active_version_code() -> str:
-    curriculum = METADATA_CACHE.get("curriculum", {})
-    combined_chapters = ""
-    for book_content in curriculum.values():
-        if isinstance(book_content, dict):
-            combined_chapters += " ".join(book_content.keys())
-    if "第一章" in combined_chapters:
-        return "B"
-    if "第 1 章 集合与逻辑" in combined_chapters or "数学建模活动案例" in combined_chapters or "第 2 章 等式与不等式" in combined_chapters or "第 3 章 幂、指数与对数" in combined_chapters:
-        return "H"
-    if "第1章" in combined_chapters:
-        return "S"
-    return "A"
-
 @app.get("/api/config/metadata")
 def get_metadata_config():
     return METADATA_CACHE
-
-@app.get("/api/config/curriculum-presets/{version}")
-def get_curriculum_preset_config(version: str):
-    try:
-        return get_curriculum_preset(version)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-def route_chapter(comp: str, chap: str, know: str, target: str) -> tuple[str, str, str]:
-    """跨大纲版本智能章节与小节路由翻译算法，返回 (new_compulsory, new_chapter, new_knowledge)"""
-    combined = f"{comp} {chap} {know}"
-    new_comp, new_chap = "", ""
-    if target == "A":
-        if "集合" in combined: new_comp, new_chap = "必修一", "1. 集合与常用逻辑用语"
-        elif "逻辑" in combined: new_comp, new_chap = "必修一", "1. 集合与常用逻辑用语"
-        elif "等式" in combined or "不等式" in combined: new_comp, new_chap = "必修一", "2. 一元二次函数、方程和不等式"
-        elif "指数" in combined or "对数" in combined: new_comp, new_chap = "必修一", "4. 指数函数与对数函数"
-        elif "三角函数" in combined or "三角恒等" in combined: new_comp, new_chap = "必修一", "5. 三角函数"
-        elif "函数" in combined: new_comp, new_chap = "必修一", "3. 函数的概念与性质"
-        elif "解三角形" in combined or "正弦" in combined or "余弦" in combined: new_comp, new_chap = "必修二", "6. 平面向量及其应用"
-        elif "数量积" in combined or "平面向量" in combined: new_comp, new_chap = "必修二", "6. 平面向量及其应用"
-        elif "复数" in combined: new_comp, new_chap = "必修二", "7. 复数"
-        elif "立体几何" in combined and "空间向量" not in combined: new_comp, new_chap = "必修二", "8. 立体几何初步"
-        elif "空间向量" in combined: new_comp, new_chap = "选修一", "1. 空间向量与立体几何"
-        elif "直线" in combined or "圆的方程" in combined: new_comp, new_chap = "选修一", "2. 直线和圆的方程"
-        elif "圆" in combined and "圆锥曲线" not in combined: new_comp, new_chap = "选修一", "2. 直线和圆的方程"
-        elif "圆锥曲线" in combined or "椭圆" in combined or "双曲线" in combined or "抛物线" in combined: new_comp, new_chap = "选修一", "3. 圆锥曲线的方程"
-        elif "解析几何" in combined: new_comp, new_chap = "选修一", "2. 直线和圆的方程"
-        elif "数列" in combined: new_comp, new_chap = "选修二", "4. 数列"
-        elif "导数" in combined: new_comp, new_chap = "选修二", "5. 一元函数的导数及其应用"
-        elif "计数" in combined or "排列" in combined or "组合" in combined or "二项式" in combined: new_comp, new_chap = "选修三", "6. 计数原理"
-        elif "概率" in combined or "随机变量" in combined or "分布" in combined: new_comp, new_chap = "选修三", "7. 随机变量及其分布"
-        elif "统计" in combined or "回归" in combined or "独立性" in combined or "成对" in combined: new_comp, new_chap = "选修三", "8. 成对数据的统计分析"
-        else: new_comp, new_chap = "必修一", "1. 集合与常用逻辑用语"
-    elif target == "B":
-        if "集合" in combined: new_comp, new_chap = "必修一", "第一章 集合与常用逻辑用语"
-        elif "逻辑" in combined: new_comp, new_chap = "必修一", "第一章 集合与常用逻辑用语"
-        elif "等式" in combined or "不等式" in combined: new_comp, new_chap = "必修一", "第二章 等式与不等式"
-        elif "指数" in combined or "对数" in combined: new_comp, new_chap = "必修二", "第四章 指数函数、对数函数与幂函数"
-        elif "三角函数" in combined: new_comp, new_chap = "必修三", "第七章 三角函数"
-        elif "函数" in combined: new_comp, new_chap = "必修一", "第三章 函数"
-        elif "解三角形" in combined or "正弦" in combined or "余弦" in combined: new_comp, new_chap = "必修四", "第九章 解三角形"
-        elif "数量积" in combined or "三角恒等" in combined: new_comp, new_chap = "必修三", "第八章 向量的数量积与三角恒等变换"
-        elif "平面向量" in combined: new_comp, new_chap = "必修二", "第六章 平面向量初步"
-        elif "复数" in combined: new_comp, new_chap = "必修四", "第十章 复数"
-        elif "立体几何" in combined and "空间向量" not in combined: new_comp, new_chap = "必修四", "第十一章 立体几何初步"
-        elif "空间向量" in combined: new_comp, new_chap = "选修一", "第一章 空间向量与立体几何"
-        elif "直线" in combined or "圆" in combined or "圆锥曲线" in combined or "椭圆" in combined or "双曲线" in combined or "抛物线" in combined: new_comp, new_chap = "选修一", "第二章 平面解析几何"
-        elif "解析几何" in combined: new_comp, new_chap = "选修一", "第二章 平面解析几何"
-        elif "数列" in combined: new_comp, new_chap = "选修三", "第五章 数列"
-        elif "导数" in combined: new_comp, new_chap = "选修三", "第六章 导数及其应用"
-        elif "计数" in combined or "排列" in combined or "组合" in combined or "二项式" in combined: new_comp, new_chap = "选修二", "第三章 排列、组合与二项式定理"
-        elif "随机变量" in combined or "条件概率" in combined or "回归" in combined or "独立性" in combined or "成对" in combined: new_comp, new_chap = "选修二", "第四章 概率与统计"
-        elif "统计" in combined or "概率" in combined: new_comp, new_chap = "必修二", "第五章 统计与概率"
-        else: new_comp, new_chap = "必修一", "第一章 集合与常用逻辑用语"
-    elif target == "S":
-        if "集合" in combined: new_comp, new_chap = "必修一", "第1章 集合"
-        elif "逻辑" in combined: new_comp, new_chap = "必修一", "第2章 常用逻辑用语"
-        elif "等式" in combined or "不等式" in combined: new_comp, new_chap = "必修一", "第3章 不等式"
-        elif "指数" in combined or "对数" in combined: new_comp, new_chap = "必修一", "第4章 指数与对数"
-        elif "三角函数" in combined: new_comp, new_chap = "必修一", "第7章 三角函数"
-        elif "函数" in combined: new_comp, new_chap = "必修一", "第5章 函数概念与性质"
-        elif "解三角形" in combined or "正弦" in combined or "余弦" in combined: new_comp, new_chap = "必修二", "第11章 解三角形"
-        elif "数量积" in combined or "平面向量" in combined: new_comp, new_chap = "必修二", "第9章 平面向量"
-        elif "三角恒等" in combined: new_comp, new_chap = "必修二", "第10章 三角恒等变换"
-        elif "复数" in combined: new_comp, new_chap = "必修二", "第12章 复数"
-        elif "立体几何" in combined and "空间向量" not in combined: new_comp, new_chap = "必修二", "第13章 立体几何初步"
-        elif "空间向量" in combined: new_comp, new_chap = "选修二", "第6章 空间向量与立体几何"
-        elif "直线" in combined: new_comp, new_chap = "选修一", "第1章 直线与方程"
-        elif "圆" in combined and "圆锥曲线" not in combined: new_comp, new_chap = "选修一", "第2章 圆与方程"
-        elif "圆锥曲线" in combined or "椭圆" in combined or "双曲线" in combined or "抛物线" in combined: new_comp, new_chap = "选修一", "第3章 圆锥曲线与方程"
-        elif "解析几何" in combined: new_comp, new_chap = "选修一", "第1章 直线与方程"
-        elif "数列" in combined: new_comp, new_chap = "选修一", "第4章 数列"
-        elif "导数" in combined: new_comp, new_chap = "选修一", "第5章 导数及其应用"
-        elif "计数" in combined or "排列" in combined or "组合" in combined or "二项式" in combined: new_comp, new_chap = "选修二", "第7章 计数原理"
-        elif "随机变量" in combined or "条件概率" in combined: new_comp, new_chap = "选修二", "第8章 概率"
-        elif "回归" in combined or "独立性" in combined or "成对" in combined: new_comp, new_chap = "选修二", "第9章 统计"
-        elif "统计" in combined: new_comp, new_chap = "必修二", "第14章 统计"
-        elif "概率" in combined: new_comp, new_chap = "必修二", "第15章 概率"
-        else: new_comp, new_chap = "必修一", "第1章 集合"
-    elif target == "H":
-        if "集合与逻辑" in combined or ("集合" in combined and "选修" not in comp): new_comp, new_chap = "必修一", "第 1 章 集合与逻辑"
-        elif "等式" in combined or "不等式" in combined: new_comp, new_chap = "必修一", "第 2 章 等式与不等式"
-        elif "幂、指数" in combined or "指数与对数" in combined or ("指数" in combined and "函数" not in combined) or ("对数" in combined and "函数" not in combined): new_comp, new_chap = "必修一", "第 3 章 幂、指数与对数"
-        elif "幂函数" in combined or "指数函数" in combined or "对数函数" in combined: new_comp, new_chap = "必修一", "第 4 章 幂函数、指数函数与对数函数"
-        elif "反函数" in combined or "函数的概念" in combined or ("函数" in combined and "三角" not in combined and "导数" not in combined and "选修" not in comp and "必修二" not in comp and "必修三" not in comp): new_comp, new_chap = "必修一", "第 5 章 函数的概念、性质及应用"
-        elif "解三角形" in combined or "正弦定理" in combined or "余弦定理" in combined or "常用三角公式" in combined or ("三角" in combined and "函数" not in combined): new_comp, new_chap = "必修二", "第 6 章 三角"
-        elif "三角函数" in combined: new_comp, new_chap = "必修二", "第 7 章 三角函数"
-        elif "平面向量" in combined or ("向量" in combined and "空间" not in combined): new_comp, new_chap = "必修二", "第 8 章 平面向量"
-        elif "复数" in combined: new_comp, new_chap = "必修二", "第 9 章 复数"
-        elif "空间直线" in combined or "空间点" in combined or ("立体几何" in combined and "空间向量" not in combined and "简单几何体" not in combined and "球" not in combined and "柱体" not in combined and "锥体" not in combined): new_comp, new_chap = "必修三", "第 10 章 空间直线与平面"
-        elif "简单几何体" in combined or "柱体" in combined or "锥体" in combined or "多面体" in combined or "球" in combined: new_comp, new_chap = "必修三", "第 11 章 简单几何体"
-        elif "古典概" in combined or "随机现象" in combined or ("概率" in combined and "条件概率" not in combined and "随机变量" not in combined and "分布" not in combined and "选修" not in comp): new_comp, new_chap = "必修三", "第 12 章 概率初步"
-        elif "总体与样本" in combined or "抽样" in combined or "统计图表" in combined or ("统计" in combined and "成对" not in combined and "回归" not in combined and "列联表" not in combined and "选修" not in comp): new_comp, new_chap = "必修三", "第 13 章 统计"
-        elif "红绿灯" in combined or "优惠券" in combined or "车辆转弯" in combined or "雨中行" in combined or "出租车" in combined or "家具" in combined or "登山" in combined or "包装彩带" in combined or "削菠萝" in combined or "高度测量" in combined or "外卖" in combined or "必修四" in comp: new_comp, new_chap = "必修四", "第 1 部分 数学建模活动案例"
-        elif "平面直角坐标系中的直线" in combined or "直线与方程" in combined or ("直线" in combined and "空间" not in combined and "圆锥曲线" not in combined): new_comp, new_chap = "选修一", "第 1 章 平面直角坐标系中的直线"
-        elif "圆锥曲线" in combined or "椭圆" in combined or "双曲线" in combined or "抛物线" in combined or ("圆" in combined and "圆锥曲线" in combined): new_comp, new_chap = "选修一", "第 2 章 圆锥曲线"
-        elif "空间向量" in combined: new_comp, new_chap = "选修一", "第 3 章 空间向量及其应用"
-        elif "数列" in combined or "等差数列" in combined or "等比数列" in combined or "数学归纳法" in combined: new_comp, new_chap = "选修一", "第 4 章 数列"
-        elif "导数" in combined: new_comp, new_chap = "选修二", "第 5 章 导数及其应用"
-        elif "计数原理" in combined or "排列" in combined or "组合" in combined or "二项式" in combined: new_comp, new_chap = "选修二", "第 6 章 计数原理"
-        elif "条件概率" in combined or "随机变量" in combined or "常用分布" in combined or "二项分布" in combined or "正态分布" in combined: new_comp, new_chap = "选修二", "第 7 章 概率初步（续）"
-        elif "成对数据" in combined or "线性回归" in combined or "列联表" in combined or "独立性检验" in combined or "回归" in combined: new_comp, new_chap = "选修二", "第 8 章 成对数据的统计分析"
-        elif "刹车距离" in combined or "易拉罐" in combined or "珠穆朗玛峰" in combined or "水葫芦" in combined or "铅球" in combined or "电梯调度" in combined or "存款计划" in combined or "民生巨变" in combined or "教室里的照明" in combined or "选修三" in comp: new_comp, new_chap = "选修三", "第 1 部分 数学建模活动案例"
-        else: new_comp, new_chap = "必修一", "第 1 章 集合与逻辑"
-
-    active_v = get_active_version_code()
-    if target == active_v:
-        c_tree = METADATA_CACHE.get("curriculum", {})
-    else:
-        try:
-            c_tree = load_curriculum(target)
-        except ValueError:
-            c_tree = {}
-    
-    valid_knows = c_tree.get(new_comp, {}).get(new_chap, [])
-    new_know = know if know in valid_knows else ""
-    return new_comp, new_chap, new_know
 
 @app.post("/api/config/metadata")
 def save_metadata_config(
     payload: dict,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
 ):
     global METADATA_CACHE
     # Validation
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="请求 Payload 格式错误")
-        
-    for field in ["question_types", "difficulties", "curriculum"]:
+
+    for field in METADATA_FIELDS:
         if field not in payload:
             raise HTTPException(status_code=400, detail=f"元数据配置缺少核心字段: '{field}'")
-            
-    # Simple validate question_types and difficulties lists
+
     if not isinstance(payload["question_types"], list) or not isinstance(payload["difficulties"], list):
         raise HTTPException(status_code=400, detail="question_types 或 difficulties 必须是数组列表")
-        
-    if not isinstance(payload["curriculum"], dict):
-        raise HTTPException(status_code=400, detail="curriculum 必须是字典对象")
-        
-    old_metadata = METADATA_CACHE
+
+    cleaned = normalize_metadata(payload)
     metadata_path = Path(METADATA_FILE)
-    old_file_contents = (
-        metadata_path.read_text(encoding="utf-8") if metadata_path.exists() else None
-    )
-    file_replaced = False
-    transaction_committed = False
-
-    # Update the curriculum mirror and metadata as one compensated operation.
     try:
-        source_version = get_active_version_code()
-        # Detect target version
-        curriculum = payload.get("curriculum", {})
-        combined_chapters = ""
-        for book_content in curriculum.values():
-            if isinstance(book_content, dict):
-                combined_chapters += " ".join(book_content.keys())
-        if "第一章" in combined_chapters:
-            target_version = "B"
-        elif "第 1 章 集合与逻辑" in combined_chapters or "数学建模活动案例" in combined_chapters or "第 2 章 等式与不等式" in combined_chapters or "第 3 章 幂、指数与对数" in combined_chapters:
-            target_version = "H"
-        elif "第1章" in combined_chapters:
-            target_version = "S"
-        else:
-            target_version = "A"
-
-        # Incremental migration if curriculum version shifts
-        if source_version != target_version:
-            # Check and run incremental migration for all questions that do not have classifications for target_version
-            all_questions = db.query(Question).all()
-            for q in all_questions:
-                target_map = db.query(QuestionCurriculum).filter(
-                    QuestionCurriculum.question_id == q.id,
-                    QuestionCurriculum.version_code == target_version
-                ).first()
-                if not target_map or not target_map.compulsory:
-                    source_map = db.query(QuestionCurriculum).filter(
-                        QuestionCurriculum.question_id == q.id,
-                        QuestionCurriculum.version_code == source_version
-                    ).first()
-                    if source_map and source_map.compulsory:
-                        new_comp, new_chap, new_know = route_chapter(
-                            source_map.compulsory, source_map.chapter, source_map.knowledge, target_version
-                        )
-                        if not target_map:
-                            target_map = QuestionCurriculum(
-                                question_id=q.id,
-                                version_code=target_version
-                            )
-                            db.add(target_map)
-                        target_map.compulsory = new_comp
-                        target_map.chapter = new_chap
-                        target_map.knowledge = new_know
-        # Batch update main questions table categories with target version values
-        from sqlalchemy import text
-        db.flush()
-        db.execute(text("""
-            UPDATE questions 
-            SET category_compulsory = COALESCE((SELECT compulsory FROM question_curriculums WHERE question_id = questions.id AND version_code = :v), ''),
-                category_chapter = COALESCE((SELECT chapter FROM question_curriculums WHERE question_id = questions.id AND version_code = :v), ''),
-                category_knowledge = COALESCE((SELECT knowledge FROM question_curriculums WHERE question_id = questions.id AND version_code = :v), '')
-        """), {"v": target_version})
-
         write_private_text_atomic(
             metadata_path,
-            json.dumps(payload, ensure_ascii=False, indent=2),
+            json.dumps(cleaned, ensure_ascii=False, indent=2),
         )
-        file_replaced = True
-        db.commit()
-        transaction_committed = True
-    except Exception as e:
-        db.rollback()
-        if not transaction_committed:
-            METADATA_CACHE = old_metadata
-        if file_replaced and not transaction_committed:
-            try:
-                if old_file_contents is None:
-                    metadata_path.unlink(missing_ok=True)
-                else:
-                    write_private_text_atomic(metadata_path, old_file_contents)
-            except OSError as restore_error:
-                print(
-                    "[Metadata] Failed to restore metadata after DB rollback "
-                    f"(type={type(restore_error).__name__})."
-                )
-        raise HTTPException(status_code=500, detail=f"保存元数据失败: {str(e)}")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"保存元数据失败: {str(exc)}") from exc
 
-    # Everything below is post-commit and must not change the successful save
-    # into an error response or compensate already-durable database changes.
-    METADATA_CACHE = payload
-    print(
-        f"[Metadata] Saved new custom metadata to {METADATA_FILE} "
-        f"(Detected version: {target_version})"
-    )
+    METADATA_CACHE = cleaned
+    print(f"[Metadata] Saved new custom metadata to {METADATA_FILE}")
     schedule_database_export(background_tasks, operation="save_metadata")
     return {"status": "success", "message": "元数据配置保存成功！"}
 
@@ -3667,38 +3275,6 @@ def get_db_stats(db: Session = Depends(get_db)):
         challenge = db.query(Question).filter(Question.difficulty == "challenge").count()
         qiangji = db.query(Question).filter(Question.difficulty == "qiangji").count()
         
-        # Cascaded Stage & Chapter Counts
-        rows = db.query(
-            Question.category_compulsory,
-            Question.category_chapter
-        ).all()
-        
-        comp_chap_stats = {}
-        for comp, chap in rows:
-            comp_val = comp or "未分类"
-            chap_val = chap or "未分章节"
-            if comp_val not in comp_chap_stats:
-                comp_chap_stats[comp_val] = {}
-            if chap_val not in comp_chap_stats[comp_val]:
-                comp_chap_stats[comp_val][chap_val] = 0
-            comp_chap_stats[comp_val][chap_val] += 1
-            
-        def compulsory_sort_key(comp_name: str):
-            if not comp_name or comp_name == "未分类":
-                return (99, 99, comp_name or "")
-            num_map = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6}
-            is_comp = 0 if ("必修" in comp_name and "选" not in comp_name) else 1
-            num = 99
-            for k, v in num_map.items():
-                if k in comp_name:
-                    num = min(num, v)
-            return (is_comp, num, comp_name)
-
-        sorted_comp_chap_stats = {
-            k: comp_chap_stats[k]
-            for k in sorted(comp_chap_stats.keys(), key=compulsory_sort_key)
-        }
-            
         # Daily additions in local time (UTC+8)
         date_rows = db.query(Question.created_at).all()
         daily_adds = {}
@@ -3716,155 +3292,11 @@ def get_db_stats(db: Session = Depends(get_db)):
             "easy_error_count": easy_error,
             "challenge_count": challenge,
             "qiangji_count": qiangji,
-            "compulsory_chapter_counts": sorted_comp_chap_stats,
             "daily_adds": daily_adds
         }
     except Exception as e:
         return JSONResponse(
             content={"status": "error", "message": f"获取统计数据失败: {str(e)}"},
-            status_code=500
-        )
-
-@app.get("/api/categories")
-def list_categories(db: Session = Depends(get_db)):
-    # Initialize with predefined curriculum
-    hierarchy = {}
-    for comp, chapters in get_current_curriculum().items():
-        hierarchy[comp] = {}
-        for chap, sections in chapters.items():
-            hierarchy[comp][chap] = list(sections)
-            
-    # Also fetch any custom entries from DB
-    results = db.query(
-        Question.category_compulsory,
-        Question.category_chapter,
-        Question.category_knowledge
-    ).distinct().all()
-    
-    for comp, chap, know in results:
-        if not comp:
-            continue
-        if comp not in hierarchy:
-            hierarchy[comp] = {}
-        if not chap:
-            continue
-        if chap not in hierarchy[comp]:
-            hierarchy[comp][chap] = []
-        if know and know not in hierarchy[comp][chap]:
-            hierarchy[comp][chap].append(know)
-            
-    return hierarchy
-
-# ----------------- AI Auto-Classification API -----------------
-
-@app.post("/api/ai/classify")
-def ai_classify(content: str = Form(...)):
-    classify_model = (
-        os.getenv("PREFER_CLASSIFY_MODEL") 
-        or os.getenv("DEEPSEEK_CLASSIFY_MODEL") 
-        or os.getenv("PREFER_PARSE_MODEL") 
-        or "deepseek-v4-flash"
-    )
-    
-    provider = resolve_text_provider(classify_model)
-    api_key = provider.api_key
-    api_base = provider.api_base
-    model_name = provider.model_name
-    provider_name = provider.credential_label
-
-    if not api_key:
-        return JSONResponse(
-            content={
-                "status": "error", 
-                "message": f"未配置对应的 API Key ({provider_name})，无法自动智能分类！请在工作台右上角设置面板进行配置。"
-            },
-            status_code=400
-        )
-        
-    try:
-        system_instructions = build_classification_system_prompt(get_current_curriculum())
-        data = {
-            "model": model_name,
-            "messages": [
-                {"role": "system", "content": system_instructions},
-                {"role": "user", "content": f"题目内容:\n{content}"}
-            ],
-            "response_format": {
-                "type": "json_object"
-            },
-            "temperature": 0.2,
-            "max_tokens": 512
-        }
-        
-        # Only add thinking if using a DeepSeek model or DeepSeek base URL, excluding legacy models that don't support it
-        is_deepseek = ("deepseek" in model_name.lower() or "deepseek" in api_base.lower()) and "deepseek-chat" not in model_name.lower() and "deepseek-reasoner" not in model_name.lower()
-        if is_deepseek and provider.reasoning_effort in {None, "default"}:
-            data["thinking"] = {
-                "type": "disabled"
-            }
-        data = inject_reasoning_effort(data, provider.reasoning_effort)
-        data = apply_bailian_thinking_policy(
-            data,
-            provider_code=provider.provider_code,
-            model_name=model_name,
-            task="classify",
-        )
-        
-        response = post_chat_completion(
-            provider,
-            data,
-            timeout=30,
-            provider_name=provider_name,
-        )
-            
-        res_json = response.json()
-        ai_message = res_json.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-        
-        # Strip potential markdown formatting if returned
-        if ai_message.startswith("```"):
-            lines = ai_message.split("\n")
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines[-1].strip() == "```":
-                lines = lines[:-1]
-            ai_message = "\n".join(lines).strip()
-            
-        result = json.loads(ai_message)
-        compulsory = result.get("compulsory", "")
-        chapter = result.get("chapter", "")
-        structured_question_form = detect_structured_question_form(content)
-        question_form = structured_question_form or normalize_ai_question_form(
-            result.get("question_form")
-        )
-        question_form_source = "structure" if structured_question_form else "ai"
-        
-        # Verification: make sure returned values exist in get_current_curriculum()
-        curr = get_current_curriculum()
-        if compulsory in curr and chapter in curr[compulsory]:
-            return {
-                "status": "success",
-                "compulsory": compulsory,
-                "chapter": chapter,
-                "question_form": question_form,
-                "question_form_source": question_form_source,
-            }
-        else:
-            # Fallback dynamically to the first available category book/chapter
-            first_comp = list(curr.keys())[0] if curr else "必修一"
-            first_chap = list(curr[first_comp].keys())[0] if curr and first_comp in curr and curr[first_comp] else "1. 集合与常用逻辑用语"
-            return {
-                "status": "success",
-                "compulsory": first_comp,
-                "chapter": first_chap,
-                "question_form": question_form,
-                "question_form_source": question_form_source,
-                "is_fallback": True,
-                "raw_recommendation": f"{compulsory} -> {chapter}"
-            }
-            
-    except Exception as e:
-        return JSONResponse(
-            content={"status": "error", "message": f"AI 智能分类失败: {str(e)}"},
             status_code=500
         )
 
@@ -3962,9 +3394,7 @@ def parse_paper_text_internal(
     if not api_key:
         raise ValueError(f"未配置对应的 API Key ({provider.credential_label})，无法智能拆解试卷！请在工作台右上角设置面板进行配置。")
 
-    system_instructions = build_pdf_parse_system_prompt(
-        get_current_curriculum(), generate_answers_bool
-    )
+    system_instructions = build_pdf_parse_system_prompt(generate_answers_bool)
 
     max_output_tokens = 65536
 
@@ -4083,7 +3513,7 @@ def ai_parse_paper(
         if not paper_title.strip() and tex_result["title"]:
             paper_title = tex_result["title"]
 
-        system_instructions = build_import_parse_system_prompt(get_current_curriculum())
+        system_instructions = build_import_parse_system_prompt()
 
         max_output_tokens = 65536
 
@@ -4726,9 +4156,6 @@ def ai_select_paper(payload: dict, db: Session = Depends(get_db)):
         prompt = payload.get("prompt", "").strip()
         question_type = payload.get("question_type", "")
         difficulty = payload.get("difficulty", "")
-        compulsory = payload.get("compulsory", "")
-        chapter = payload.get("chapter", "")
-        knowledge = payload.get("knowledge", "")
         limit = max(1, min(int(payload.get("limit", 5)), 20))
 
         # 0. 自然语言意图智能分析 (NL Intent Parser)
@@ -4757,13 +4184,7 @@ def ai_select_paper(payload: dict, db: Session = Depends(get_db)):
             query = query.filter(Question.question_type == question_type)
         if difficulty:
             query = query.filter(Question.difficulty == difficulty)
-        if compulsory:
-            query = query.filter(Question.category_compulsory == compulsory)
-        if chapter:
-            query = query.filter(Question.category_chapter == chapter)
-        if knowledge:
-            query = query.filter(Question.category_knowledge == knowledge)
-            
+
         if is_review_intent:
             # 复习/旧题模式：优先提取已使用频次高的题目
             review_query = query.filter(Question.usage_count > 0).order_by(Question.usage_count.desc(), Question.id.desc())
@@ -4805,7 +4226,6 @@ def ai_select_paper(payload: dict, db: Session = Depends(get_db)):
                         "question_type": q.question_type,
                         "difficulty": q.difficulty,
                         "usage_count": q.usage_count or 0,
-                        "knowledge": q.category_knowledge or q.category_chapter or "通用知识点",
                         "tags": q.tags or "",
                         "stem_excerpt": clean_stem
                     })
@@ -4898,8 +4318,7 @@ def ai_select_paper(payload: dict, db: Session = Depends(get_db)):
                     sub_query = sub_query.filter(Question.question_type == question_type)
                 sub_query = sub_query.filter(
                     (Question.content.like(f"%{topic}%")) |
-                    (Question.category_chapter.like(f"%{topic}%")) |
-                    (Question.category_knowledge.like(f"%{topic}%")) |
+                    (Question.answer_markdown.like(f"%{topic}%")) |
                     (Question.tags.like(f"%{topic}%"))
                 )
                 order_clause = Question.usage_count.desc() if is_review_intent else Question.usage_count.asc()

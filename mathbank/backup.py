@@ -169,10 +169,11 @@ def _snapshot_database(source_path: Path, target_path: Path) -> dict[str, Any]:
         }
         required_count_tables = [
             "questions",
-            "question_curriculums",
             "papers",
             "paper_questions",
         ]
+        if schema_version <= 8:
+            required_count_tables.append("question_curriculums")
         if schema_version >= 6:
             required_count_tables.append("question_fingerprints")
         missing_required_tables = set(required_count_tables) - table_names
@@ -721,10 +722,11 @@ def verify_full_backup(archive_path: Path) -> dict[str, Any]:
                 row_counts = database_manifest.get("row_counts")
                 required_tables = {
                     "questions",
-                    "question_curriculums",
                     "papers",
                     "paper_questions",
                 }
+                if schema_version <= 8:
+                    required_tables.add("question_curriculums")
                 if schema_version >= 6:
                     required_tables.add("question_fingerprints")
                 if not isinstance(row_counts, dict) or set(row_counts) != required_tables:
